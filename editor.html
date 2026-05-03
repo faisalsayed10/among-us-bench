@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Skeld Map Editor</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Segoe UI',sans-serif; background:#1a1d22; color:#ddd; overflow:hidden; height:100vh; display:flex; }
+  #sidebar { width:260px; background:#22262d; padding:14px; overflow-y:auto; border-right:1px solid #000; flex-shrink:0; }
+  #sidebar h2 { font-size:14px; margin:14px 0 6px; color:#8fb; text-transform:uppercase; letter-spacing:1px; }
+  #sidebar h2:first-child { margin-top:0; }
+  .palette-item { background:#2d323b; padding:8px 10px; margin-bottom:6px; border-radius:4px; cursor:grab; font-size:13px; border-left:4px solid #8fb; user-select:none; }
+  .palette-item:hover { background:#363c47; }
+  .palette-item.corridor { border-left-color:#fa3; }
+  button { background:#3a4250; color:#fff; border:0; padding:8px 12px; border-radius:4px; cursor:pointer; font-size:13px; width:100%; margin-bottom:6px; }
+  button:hover { background:#4a5260; }
+  button.primary { background:#2a8; }
+  button.primary:hover { background:#3b9; }
+  button.danger { background:#a33; }
+  #canvas-wrap { flex:1; position:relative; overflow:hidden; }
+  canvas { display:block; background:#0f1114; cursor:default; }
+  #info { position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.6); padding:6px 10px; border-radius:4px; font-size:12px; pointer-events:none; }
+  #props { position:absolute; top:10px; right:10px; background:rgba(34,38,45,0.95); padding:12px; border-radius:6px; min-width:220px; font-size:12px; }
+  #props label { display:block; margin:6px 0 2px; color:#8fb; font-size:11px; text-transform:uppercase; }
+  #props input, #props select { width:100%; padding:5px; background:#1a1d22; border:1px solid #444; color:#fff; border-radius:3px; font-size:12px; }
+  #export-modal { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; z-index:10; }
+  #export-modal.show { display:flex; }
+  #export-modal .box { background:#22262d; padding:20px; border-radius:8px; width:80%; max-width:800px; max-height:80vh; display:flex; flex-direction:column; }
+  #export-modal textarea { width:100%; flex:1; min-height:400px; background:#0f1114; color:#ddd; border:1px solid #444; padding:10px; font-family:monospace; font-size:12px; border-radius:4px; }
+  #export-modal .actions { margin-top:10px; display:flex; gap:8px; }
+  .hint { font-size:11px; color:#888; margin-top:4px; line-height:1.4; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <h2>Add Room</h2>
+  <div class="palette-item" draggable="true" data-template="rect">Rectangle Room</div>
+  <div class="palette-item" draggable="true" data-template="octagon">Octagon Room</div>
+  <div class="palette-item" draggable="true" data-template="hex">Hexagon Room</div>
+  <div class="palette-item corridor" draggable="true" data-template="corridor">Corridor (drag in)</div>
+
+  <h2>Actions</h2>
+  <button id="btn-corridor">Draw Corridor (C)</button>
+  <button id="btn-delete" class="danger">Delete Selected (Del)</button>
+  <button id="btn-clear" class="danger">Clear All</button>
+
+  <h2>Map</h2>
+  <button id="btn-load">Load Current map-data.js</button>
+  <button id="btn-import">Import JSON</button>
+  <button id="btn-export" class="primary">Export Map</button>
+
+  <h2>View</h2>
+  <button id="btn-reset-view">Reset View</button>
+  <div class="hint">
+    Drag rooms from palette into canvas.<br>
+    Click to select. Drag body to move.<br>
+    Drag corner handles to resize.<br>
+    Hold Shift+drag edge handle on rectangles to reshape.<br>
+    Mouse wheel = zoom. Middle/right drag = pan.<br>
+    Press C then click two points to draw a corridor.
+  </div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="c"></canvas>
+  <div id="info">—</div>
+  <div id="props" style="display:none;">
+    <label>Name</label><input id="p-name" type="text">
+    <label>Floor Color</label><input id="p-floor" type="color">
+    <label>Wall Color</label><input id="p-wall" type="color">
+    <label>Floor Type</label>
+    <select id="p-type">
+      <option>tile</option><option>checkered</option><option>medical</option><option>metal</option>
+    </select>
+    <label>Width</label><input id="p-w" type="number">
+    <label>Height</label><input id="p-h" type="number">
+  </div>
+</div>
+
+<div id="export-modal">
+  <div class="box">
+    <h2 style="color:#8fb; margin-bottom:8px;">Map JSON</h2>
+    <textarea id="export-text" spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="export-copy" class="primary">Copy to Clipboard</button>
+      <button id="export-load">Load from Textarea</button>
+      <button id="export-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+const propsDiv = document.getElementById('props');
+
+let view = { x: 0, y: 0, scale: 1 };
+let rooms = [];
+let corridors = [];
+let selected = null;
+let nextId = 1;
+
+const TEMPLATES = {
+  rect: () => ({
+    type:'room', shape:'rect', name:'Room '+(nextId++),
+    x:400, y:200, w:200, h:150,
+    floorColor:'#a5a797', wallColor:'#4a5258', floorType:'tile',
+  }),
+  octagon: () => ({
+    type:'room', shape:'octagon', name:'Room '+(nextId++),
+    x:400, y:200, w:200, h:200,
+    floorColor:'#a5a797', wallColor:'#4a5258', floorType:'checkered',
+  }),
+  hex: () => ({
+    type:'room', shape:'hex', name:'Room '+(nextId++),
+    x:400, y:200, w:200, h:160,
+    floorColor:'#a89c8a', wallColor:'#5a4858', floorType:'tile',
+  }),
+};
+
+// ---------- geometry ----------
+function roomPolygon(r) {
+  const { x, y, w, h, shape } = r;
+  if (shape === 'rect') {
+    return [[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+  }
+  if (shape === 'octagon') {
+    const cx = Math.min(w, h) * 0.25;
+    const cy = cx;
+    return [
+      [x+cx, y], [x+w-cx, y],
+      [x+w, y+cy], [x+w, y+h-cy],
+      [x+w-cx, y+h], [x+cx, y+h],
+      [x, y+h-cy], [x, y+cy],
+    ];
+  }
+  if (shape === 'hex') {
+    const cx = w * 0.2;
+    return [
+      [x+cx, y], [x+w-cx, y],
+      [x+w, y+h/2],
+      [x+w-cx, y+h], [x+cx, y+h],
+      [x, y+h/2],
+    ];
+  }
+  return [[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+}
+
+function pointInPoly(px, py, poly) {
+  let inside = false;
+  for (let i=0,j=poly.length-1; i<poly.length; j=i++) {
+    const [xi,yi]=poly[i], [xj,yj]=poly[j];
+    if (((yi>py)!=(yj>py)) && (px < (xj-xi)*(py-yi)/(yj-yi)+xi)) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInRect(px, py, r) {
+  return px >= r.x && px <= r.x+r.w && py >= r.y && py <= r.y+r.h;
+}
+
+// corridor: stored as polyline {points:[[x,y],...], width}
+function corridorPolygon(c) {
+  // Build a thick polyline polygon for hit testing/rendering
+  const pts = c.points;
+  if (pts.length < 2) return [];
+  const w = c.width / 2;
+  const left = [], right = [];
+  for (let i=0; i<pts.length; i++) {
+    let nx, ny;
+    if (i === 0) {
+      const dx = pts[1][0]-pts[0][0], dy = pts[1][1]-pts[0][1];
+      const L = Math.hypot(dx,dy)||1; nx = -dy/L; ny = dx/L;
+    } else if (i === pts.length-1) {
+      const dx = pts[i][0]-pts[i-1][0], dy = pts[i][1]-pts[i-1][1];
+      const L = Math.hypot(dx,dy)||1; nx = -dy/L; ny = dx/L;
+    } else {
+      const d1x = pts[i][0]-pts[i-1][0], d1y = pts[i][1]-pts[i-1][1];
+      const d2x = pts[i+1][0]-pts[i][0], d2y = pts[i+1][1]-pts[i][1];
+      const L1 = Math.hypot(d1x,d1y)||1, L2 = Math.hypot(d2x,d2y)||1;
+      nx = (-d1y/L1 + -d2y/L2)/2;
+      ny = (d1x/L1 + d2x/L2)/2;
+      const NL = Math.hypot(nx,ny)||1; nx/=NL; ny/=NL;
+    }
+    left.push([pts[i][0]+nx*w, pts[i][1]+ny*w]);
+    right.push([pts[i][0]-nx*w, pts[i][1]-ny*w]);
+  }
+  return [...left, ...right.reverse()];
+}
+
+// ---------- rendering ----------
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+function worldToScreen(x, y) { return [(x-view.x)*view.scale, (y-view.y)*view.scale]; }
+function screenToWorld(x, y) { return [x/view.scale + view.x, y/view.scale + view.y]; }
+
+function draw() {
+  ctx.fillStyle = '#0f1114';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // grid
+  ctx.strokeStyle = '#1a1f26';
+  ctx.lineWidth = 1;
+  const step = 50;
+  const [wx0, wy0] = screenToWorld(0,0);
+  const [wx1, wy1] = screenToWorld(canvas.width, canvas.height);
+  ctx.beginPath();
+  for (let x = Math.floor(wx0/step)*step; x < wx1; x += step) {
+    const [sx] = worldToScreen(x, 0);
+    ctx.moveTo(sx, 0); ctx.lineTo(sx, canvas.height);
+  }
+  for (let y = Math.floor(wy0/step)*step; y < wy1; y += step) {
+    const [, sy] = worldToScreen(0, y);
+    ctx.moveTo(0, sy); ctx.lineTo(canvas.width, sy);
+  }
+  ctx.stroke();
+
+  // origin axes
+  ctx.strokeStyle = '#2a3340';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const [oxs, oys] = worldToScreen(0,0);
+  ctx.moveTo(oxs, 0); ctx.lineTo(oxs, canvas.height);
+  ctx.moveTo(0, oys); ctx.lineTo(canvas.width, oys);
+  ctx.stroke();
+
+  // corridors first (under rooms visually for stations entering them)
+  for (const c of corridors) drawCorridor(c);
+  for (const r of rooms) drawRoom(r);
+
+  // selection handles
+  if (selected) drawHandles(selected);
+
+  // pending corridor
+  if (corridorDraw.active && corridorDraw.points.length) {
+    ctx.strokeStyle = '#fa3'; ctx.lineWidth = 2; ctx.setLineDash([4,4]);
+    ctx.beginPath();
+    const [x0,y0] = worldToScreen(...corridorDraw.points[0]);
+    ctx.moveTo(x0,y0);
+    for (let i=1;i<corridorDraw.points.length;i++) {
+      const [x,y] = worldToScreen(...corridorDraw.points[i]); ctx.lineTo(x,y);
+    }
+    if (corridorDraw.cursor) {
+      const [x,y] = worldToScreen(...corridorDraw.cursor); ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawPoly(poly, fill, stroke, lw=2) {
+  ctx.beginPath();
+  for (let i=0;i<poly.length;i++) {
+    const [x,y] = worldToScreen(...poly[i]);
+    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+
+function drawRoom(r) {
+  const poly = roomPolygon(r);
+  drawPoly(poly, r.floorColor, r.wallColor, 3);
+  // label
+  const cx = r.x + r.w/2, cy = r.y + r.h/2;
+  const [sx, sy] = worldToScreen(cx, cy);
+  ctx.fillStyle = '#000a'; ctx.font = `${14*Math.min(view.scale,1.5)}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(r.name, sx, sy);
+}
+
+function drawCorridor(c) {
+  const poly = corridorPolygon(c);
+  if (poly.length < 3) return;
+  drawPoly(poly, '#4a5a62', '#3a4850', 2);
+}
+
+function drawHandles(obj) {
+  const handles = getHandles(obj);
+  for (const h of handles) {
+    const [x,y] = worldToScreen(h.x, h.y);
+    ctx.fillStyle = h.kind === 'point' ? '#fa3' : '#8fb';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  }
+  // highlight
+  if (obj.type === 'room') {
+    drawPoly(roomPolygon(obj), null, '#fa3', 2);
+  } else {
+    drawPoly(corridorPolygon(obj), null, '#fa3', 2);
+  }
+}
+
+function getHandles(obj) {
+  if (obj.type === 'room') {
+    return [
+      { id:'nw', x:obj.x, y:obj.y },
+      { id:'ne', x:obj.x+obj.w, y:obj.y },
+      { id:'se', x:obj.x+obj.w, y:obj.y+obj.h },
+      { id:'sw', x:obj.x, y:obj.y+obj.h },
+      { id:'n', x:obj.x+obj.w/2, y:obj.y },
+      { id:'e', x:obj.x+obj.w, y:obj.y+obj.h/2 },
+      { id:'s', x:obj.x+obj.w/2, y:obj.y+obj.h },
+      { id:'w', x:obj.x, y:obj.y+obj.h/2 },
+    ];
+  } else {
+    return obj.points.map((p,i)=>({ id:'p'+i, x:p[0], y:p[1], kind:'point', idx:i }));
+  }
+}
+
+// ---------- interaction ----------
+let drag = null;
+let corridorDraw = { active:false, points:[], cursor:null };
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const [wx, wy] = screenToWorld(sx, sy);
+
+  if (e.button === 1 || e.button === 2) {
+    drag = { kind:'pan', startX:sx, startY:sy, vx:view.x, vy:view.y };
+    return;
+  }
+
+  if (corridorDraw.active) {
+    corridorDraw.points.push([Math.round(wx), Math.round(wy)]);
+    draw();
+    return;
+  }
+
+  // hit test handles first if something selected
+  if (selected) {
+    const handles = getHandles(selected);
+    for (const h of handles) {
+      const [hx, hy] = worldToScreen(h.x, h.y);
+      if (Math.hypot(hx-sx, hy-sy) < 9) {
+        drag = { kind:'handle', handle:h, obj:selected, shift:e.shiftKey,
+                 startX:wx, startY:wy, snap: snapshot(selected) };
+        return;
+      }
+    }
+  }
+
+  // hit test rooms / corridors (top-most first)
+  for (let i=rooms.length-1;i>=0;i--) {
+    if (pointInPoly(wx, wy, roomPolygon(rooms[i]))) {
+      selected = rooms[i];
+      drag = { kind:'move', obj:selected, dx:wx-selected.x, dy:wy-selected.y };
+      updateProps(); draw(); return;
+    }
+  }
+  for (let i=corridors.length-1;i>=0;i--) {
+    if (pointInPoly(wx, wy, corridorPolygon(corridors[i]))) {
+      selected = corridors[i];
+      drag = { kind:'move-corridor', obj:selected, lx:wx, ly:wy };
+      updateProps(); draw(); return;
+    }
+  }
+
+  selected = null; updateProps(); draw();
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const [wx, wy] = screenToWorld(sx, sy);
+  info.textContent = `(${Math.round(wx)}, ${Math.round(wy)})`;
+
+  if (corridorDraw.active) {
+    corridorDraw.cursor = [Math.round(wx), Math.round(wy)]; draw(); return;
+  }
+
+  if (!drag) return;
+
+  if (drag.kind === 'pan') {
+    view.x = drag.vx - (sx-drag.startX)/view.scale;
+    view.y = drag.vy - (sy-drag.startY)/view.scale;
+    draw(); return;
+  }
+  if (drag.kind === 'move') {
+    drag.obj.x = Math.round(wx - drag.dx);
+    drag.obj.y = Math.round(wy - drag.dy);
+    draw(); updateProps(); return;
+  }
+  if (drag.kind === 'move-corridor') {
+    const ddx = wx - drag.lx, ddy = wy - drag.ly;
+    drag.obj.points = drag.obj.points.map(p => [Math.round(p[0]+ddx), Math.round(p[1]+ddy)]);
+    drag.lx = wx; drag.ly = wy; draw(); return;
+  }
+  if (drag.kind === 'handle') {
+    const o = drag.obj, s = drag.snap, h = drag.handle;
+    if (o.type === 'room') {
+      let nx = s.x, ny = s.y, nw = s.w, nh = s.h;
+      if (h.id.includes('w')) { nx = Math.round(wx); nw = s.x + s.w - nx; }
+      if (h.id.includes('e')) { nw = Math.round(wx) - s.x; }
+      if (h.id.includes('n')) { ny = Math.round(wy); nh = s.y + s.h - ny; }
+      if (h.id.includes('s')) { nh = Math.round(wy) - s.y; }
+      // single-axis edge handles
+      if (h.id === 'n' || h.id === 's') { nx = s.x; nw = s.w; }
+      if (h.id === 'e' || h.id === 'w') { ny = s.y; nh = s.h; }
+      if (nw >= 20 && nh >= 20) { o.x=nx; o.y=ny; o.w=nw; o.h=nh; }
+    } else {
+      o.points[h.idx] = [Math.round(wx), Math.round(wy)];
+    }
+    draw(); updateProps();
+  }
+});
+
+canvas.addEventListener('mouseup', () => { drag = null; });
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const [wx, wy] = screenToWorld(sx, sy);
+  const factor = e.deltaY < 0 ? 1.1 : 1/1.1;
+  view.scale = Math.max(0.1, Math.min(5, view.scale * factor));
+  view.x = wx - sx/view.scale;
+  view.y = wy - sy/view.scale;
+  draw();
+}, { passive: false });
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+  if (e.key === 'c' || e.key === 'C') startCorridor();
+  if (e.key === 'Escape') { corridorDraw.active = false; corridorDraw.points = []; corridorDraw.cursor = null; selected = null; updateProps(); draw(); }
+  if (e.key === 'Enter' && corridorDraw.active) finishCorridor();
+});
+
+function snapshot(o) {
+  if (o.type === 'room') return { x:o.x, y:o.y, w:o.w, h:o.h };
+  return { points: o.points.map(p=>[...p]) };
+}
+
+// ---------- drag & drop from palette ----------
+document.querySelectorAll('.palette-item').forEach(el => {
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', el.dataset.template);
+  });
+});
+canvas.addEventListener('dragover', e => e.preventDefault());
+canvas.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const t = e.dataTransfer.getData('text/plain');
+  const rect = canvas.getBoundingClientRect();
+  const [wx, wy] = screenToWorld(e.clientX-rect.left, e.clientY-rect.top);
+  if (t === 'corridor') {
+    const c = { type:'corridor', name:'Corridor '+(nextId++),
+      points:[[Math.round(wx)-80, Math.round(wy)], [Math.round(wx)+80, Math.round(wy)]],
+      width: 50 };
+    corridors.push(c); selected = c;
+  } else if (TEMPLATES[t]) {
+    const r = TEMPLATES[t]();
+    r.x = Math.round(wx - r.w/2); r.y = Math.round(wy - r.h/2);
+    rooms.push(r); selected = r;
+  }
+  updateProps(); draw();
+});
+
+// ---------- properties panel ----------
+function updateProps() {
+  if (!selected) { propsDiv.style.display = 'none'; return; }
+  propsDiv.style.display = 'block';
+  document.getElementById('p-name').value = selected.name || '';
+  if (selected.type === 'room') {
+    document.getElementById('p-floor').value = selected.floorColor;
+    document.getElementById('p-wall').value = selected.wallColor;
+    document.getElementById('p-type').value = selected.floorType;
+    document.getElementById('p-w').value = selected.w;
+    document.getElementById('p-h').value = selected.h;
+    document.getElementById('p-floor').parentElement.querySelector;
+    ['p-floor','p-wall','p-type','p-w','p-h'].forEach(id => {
+      document.getElementById(id).closest('#props').querySelectorAll(`label`);
+    });
+    showRoomFields(true);
+  } else {
+    showRoomFields(false);
+    document.getElementById('p-w').value = selected.width;
+  }
+}
+function showRoomFields(show) {
+  const props = document.getElementById('props');
+  props.querySelectorAll('label, input, select').forEach(el => {
+    if (el.id === 'p-name') return;
+    if (!show && (el.id === 'p-floor' || el.id === 'p-wall' || el.id === 'p-type' || el.id === 'p-h')) {
+      el.style.display = 'none';
+      if (el.tagName === 'LABEL') el.style.display = 'none';
+    } else {
+      el.style.display = '';
+    }
+  });
+  // simpler: toggle by previous sibling label
+  const m = { 'p-floor':true, 'p-wall':true, 'p-type':true, 'p-h':true };
+  Object.keys(m).forEach(id => {
+    const inp = document.getElementById(id);
+    inp.style.display = show ? '' : 'none';
+    inp.previousElementSibling.style.display = show ? '' : 'none';
+  });
+  document.getElementById('p-w').previousElementSibling.textContent = show ? 'Width' : 'Corridor Width';
+}
+
+document.getElementById('p-name').addEventListener('input', e => { if(selected){selected.name=e.target.value;draw();} });
+document.getElementById('p-floor').addEventListener('input', e => { if(selected?.type==='room'){selected.floorColor=e.target.value;draw();} });
+document.getElementById('p-wall').addEventListener('input', e => { if(selected?.type==='room'){selected.wallColor=e.target.value;draw();} });
+document.getElementById('p-type').addEventListener('change', e => { if(selected?.type==='room'){selected.floorType=e.target.value;draw();} });
+document.getElementById('p-w').addEventListener('input', e => {
+  const v = parseInt(e.target.value)||0;
+  if (selected?.type==='room') selected.w = v;
+  else if (selected?.type==='corridor') selected.width = v;
+  draw();
+});
+document.getElementById('p-h').addEventListener('input', e => { if(selected?.type==='room'){selected.h=parseInt(e.target.value)||0;draw();} });
+
+// ---------- toolbar actions ----------
+function deleteSelected() {
+  if (!selected) return;
+  rooms = rooms.filter(r => r !== selected);
+  corridors = corridors.filter(c => c !== selected);
+  selected = null; updateProps(); draw();
+}
+function startCorridor() {
+  corridorDraw.active = true; corridorDraw.points = []; corridorDraw.cursor = null;
+  selected = null; updateProps();
+  info.textContent = 'Corridor mode: click points, Enter to finish, Esc to cancel';
+}
+function finishCorridor() {
+  if (corridorDraw.points.length >= 2) {
+    const c = { type:'corridor', name:'Corridor '+(nextId++),
+                points: corridorDraw.points.slice(), width: 50 };
+    corridors.push(c); selected = c; updateProps();
+  }
+  corridorDraw.active = false; corridorDraw.points = []; corridorDraw.cursor = null;
+  draw();
+}
+
+document.getElementById('btn-corridor').onclick = startCorridor;
+document.getElementById('btn-delete').onclick = deleteSelected;
+document.getElementById('btn-clear').onclick = () => {
+  if (confirm('Clear all rooms and corridors?')) { rooms=[]; corridors=[]; selected=null; updateProps(); draw(); }
+};
+document.getElementById('btn-reset-view').onclick = () => { view = {x:-50,y:-50,scale:1}; draw(); };
+
+// ---------- export / import ----------
+function buildExport() {
+  // Compute bounds
+  const allPts = [];
+  rooms.forEach(r => roomPolygon(r).forEach(p => allPts.push(p)));
+  corridors.forEach(c => c.points.forEach(p => allPts.push(p)));
+  let bounds = { x:0, y:0, width:1200, height:820 };
+  if (allPts.length) {
+    const xs = allPts.map(p=>p[0]), ys = allPts.map(p=>p[1]);
+    bounds = { x: Math.min(...xs)-40, y: Math.min(...ys)-40,
+               width: Math.max(...xs)-Math.min(...xs)+80,
+               height: Math.max(...ys)-Math.min(...ys)+80 };
+  }
+  return {
+    bounds,
+    rooms: rooms.map(r => ({
+      name: r.name, shape: r.shape,
+      floorColor: r.floorColor, wallColor: r.wallColor, floorType: r.floorType,
+      x: r.x, y: r.y, w: r.w, h: r.h,
+      polygon: roomPolygon(r),
+      label: [r.x + r.w/2, r.y + r.h/2],
+    })),
+    corridors: corridors.map(c => ({
+      name: c.name, points: c.points, width: c.width,
+      polygon: corridorPolygon(c),
+    })),
+  };
+}
+
+const modal = document.getElementById('export-modal');
+const exportText = document.getElementById('export-text');
+document.getElementById('btn-export').onclick = () => {
+  exportText.value = JSON.stringify(buildExport(), null, 2);
+  modal.classList.add('show');
+};
+document.getElementById('btn-import').onclick = () => {
+  exportText.value = '';
+  modal.classList.add('show');
+};
+document.getElementById('export-close').onclick = () => modal.classList.remove('show');
+document.getElementById('export-copy').onclick = async () => {
+  await navigator.clipboard.writeText(exportText.value);
+  document.getElementById('export-copy').textContent = 'Copied!';
+  setTimeout(()=>document.getElementById('export-copy').textContent='Copy to Clipboard', 1200);
+};
+document.getElementById('export-load').onclick = () => {
+  try {
+    const data = JSON.parse(exportText.value);
+    loadFromExport(data);
+    modal.classList.remove('show');
+  } catch (e) { alert('Invalid JSON: '+e.message); }
+};
+
+function loadFromExport(data) {
+  rooms = (data.rooms||[]).map(r => ({
+    type:'room', shape:r.shape||'rect', name:r.name,
+    x:r.x, y:r.y, w:r.w, h:r.h,
+    floorColor:r.floorColor||'#a5a797', wallColor:r.wallColor||'#4a5258',
+    floorType:r.floorType||'tile',
+  }));
+  corridors = (data.corridors||[]).map(c => ({
+    type:'corridor', name:c.name, points:c.points, width:c.width||50,
+  }));
+  selected = null; updateProps(); draw();
+}
+
+// ---------- load existing map-data.js ----------
+document.getElementById('btn-load').onclick = async () => {
+  try {
+    const mod = await import('./src/map-data.js');
+    rooms = []; corridors = [];
+    for (const r of mod.rooms) {
+      const xs = r.polygon.map(p=>p[0]), ys = r.polygon.map(p=>p[1]);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      const w = Math.max(...xs)-x, h = Math.max(...ys)-y;
+      let shape = 'rect';
+      if (r.polygon.length === 8) shape = 'octagon';
+      else if (r.polygon.length === 6) shape = 'hex';
+      rooms.push({
+        type:'room', shape, name:r.name,
+        x, y, w, h,
+        floorColor:r.floorColor, wallColor:r.wallColor, floorType:r.floorType||'tile',
+      });
+    }
+    for (const hw of (mod.hallways||[])) {
+      // approximate as 2-point corridor along its long axis
+      const xs = hw.polygon.map(p=>p[0]), ys = hw.polygon.map(p=>p[1]);
+      const minX=Math.min(...xs), maxX=Math.max(...xs);
+      const minY=Math.min(...ys), maxY=Math.max(...ys);
+      const w = maxX-minX, h = maxY-minY;
+      const horiz = w >= h;
+      const points = horiz
+        ? [[minX, (minY+maxY)/2], [maxX, (minY+maxY)/2]]
+        : [[(minX+maxX)/2, minY], [(minX+maxX)/2, maxY]];
+      const width = horiz ? h : w;
+      corridors.push({ type:'corridor', name:hw.name, points, width });
+    }
+    selected = null; updateProps(); draw();
+  } catch (e) { alert('Could not load map-data.js: '+e.message); }
+};
+
+// init
+view = { x:-50, y:-50, scale:1 };
+resize();
+</script>
+</body>
+</html>

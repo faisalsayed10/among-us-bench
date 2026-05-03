@@ -1,0 +1,12 @@
+{
+  "name": "among-us-claude",
+  "version": "0.1.0",
+  "description": "Among Us game simulation with AI agents",
+  "scripts": {
+    "dev": "npx vite",
+    "build": "npx vite build"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
