@@ -243,14 +243,14 @@ export const hallways = [
   { name: 'H-Weapons-South',      polygon: [[1305, 325], [1345, 325], [1345, 370], [1305, 370]] },
   { name: 'H-Weapons-Cross',      polygon: [[1225, 365], [1479, 365], [1479, 411], [1225, 411]] },
   { name: 'H-Corridor-MedBay',    polygon: [[620, 270], [670, 270], [670, 320], [620, 320]] },
-  { name: 'H-Engine-Vertical',    polygon: [[307, 300], [357, 300], [357, 624], [307, 624]] },
+  { name: 'H-Engine-Vertical',    polygon: [[307, 295], [357, 295], [357, 620], [307, 620]] },
   { name: 'H-Reactor-Connect',    polygon: [[240, 411], [408, 411], [408, 461], [240, 461]] },
   { name: 'H-LowerEng-East',      polygon: [[394, 641], [506, 641], [506, 691], [394, 691]] },
   { name: 'H-LowerEng-South',     polygon: [[455, 691], [506, 691], [506, 779], [455, 779]] },
   { name: 'H-Bottom',             polygon: [[455, 729], [805, 729], [805, 779], [455, 779]] },
   { name: 'H-Electrical-South',   polygon: [[620, 696], [670, 696], [670, 733], [620, 733]] },
-  { name: 'H-Cafe-Storage',       polygon: [[926, 437], [976, 437], [976, 566], [926, 566]] },
-  { name: 'H-Storage-Admin',      polygon: [[977, 476], [1108, 476], [1108, 526], [977, 526]] },
+  { name: 'H-Cafe-Storage',       polygon: [[926, 430], [980, 430], [980, 570], [926, 570]] },
+  { name: 'H-Storage-Admin',      polygon: [[970, 476], [1108, 476], [1108, 526], [970, 526]] },
   { name: 'H-Storage-Comms',      polygon: [[1075, 653], [1303, 653], [1303, 705], [1075, 705]] },
   { name: 'H-Comms-Shields',      polygon: [[1184, 702], [1234, 702], [1234, 730], [1184, 730]] },
   { name: 'H-Cross-Shields',      polygon: [[1427, 368], [1477, 368], [1477, 484], [1427, 484]] },
@@ -268,24 +268,33 @@ export const hallwayStyle = {
 // ========================
 // VENTS
 // ========================
+// Canonical Skeld vent layout: 12 vents in 5 groups.
 export const vents = [
+  // Cafeteria–Admin loop
   { x: 1120, y: 295, room: 'Cafeteria', id: 1 },
-  { x: 570, y: 412, room: 'MedBay', id: 2 },
-  { x: 1375, y: 250, room: 'Weapons', id: 3 },
-  { x: 635, y: 670, room: 'Electrical', id: 4 },
-  { x: 105, y: 320, room: 'Reactor', id: 5 },
-  { x: 1585, y: 480, room: 'Navigation', id: 6 },
-  { x: 1445, y: 740, room: 'Shields', id: 7 },
-  { x: 465, y: 437, room: 'Security', id: 8 },
-  { x: 825, y: 850, room: 'Storage', id: 9 },
-  { x: 1135, y: 800, room: 'Communications', id: 10 },
+  { x: 1115, y: 450, room: 'Admin', id: 2 },
+  // Engine triangle: Upper Engine ↔ Reactor ↔ Lower Engine
+  { x: 388, y: 275, room: 'Upper Engine', id: 3 },
+  { x: 215, y: 445, room: 'Reactor', id: 4 },
+  { x: 388, y: 700, room: 'Lower Engine', id: 5 },
+  // MedBay ↔ Security ↔ Electrical triangle
+  { x: 720, y: 485, room: 'MedBay', id: 6 },
+  { x: 457, y: 500, room: 'Security', id: 7 },
+  { x: 560, y: 540, room: 'Electrical', id: 8 },
+  // Weapons ↔ Navigation (upper)
+  { x: 1290, y: 175, room: 'Weapons', id: 9 },
+  { x: 1670, y: 390, room: 'Navigation', id: 10 },
+  // Shields ↔ Navigation (lower)
+  { x: 1305, y: 740, room: 'Shields', id: 11 },
+  { x: 1670, y: 482, room: 'Navigation', id: 12 },
 ];
 
 export const ventConnections = [
-  [1, 3, 8],
-  [2, 4],
-  [5, 9],
-  [6, 7, 10],
+  [1, 2],         // Cafeteria ↔ Admin
+  [3, 4, 5],      // Upper Engine ↔ Reactor ↔ Lower Engine
+  [6, 7, 8],      // MedBay ↔ Security ↔ Electrical
+  [9, 10],        // Weapons ↔ Navigation (upper)
+  [11, 12],       // Shields ↔ Navigation (lower)
 ];
 
 // ========================

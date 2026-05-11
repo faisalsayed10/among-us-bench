@@ -2,6 +2,7 @@ import { renderMap } from './map-renderer.js';
 import { MAP_BOUNDS } from './map-data.js';
 import { Player } from './player.js';
 import { getWalkableZones } from './collision.js';
+import { computeVisibilityPolygon } from './visibility.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -150,6 +151,67 @@ function drawDebugOverlay(ctx) {
 }
 
 // ========================
+// VISION FOG
+// ========================
+// Among Us-style limited visibility: a soft radial light around the player,
+// rest of the screen darkened. Drawn in screen space after the world.
+
+// Vision is a full visibility polygon — bounded by walls — combined with a
+// soft radial falloff so distant areas fade out even when line-of-sight is
+// open (otherwise vision "leaks" through doorways across the whole ship).
+const VISION_RADIUS = 300;
+const VISION_FALLOFF_START = 0.5; // fully lit until this fraction of radius
+const FOG_OPACITY = 0.95;
+
+let cachedPoly = null;
+let cachedPolyAt = { x: -9999, y: -9999 };
+
+function drawVisionFog() {
+  // Only recompute the polygon when the player has actually moved — keeps the
+  // ray-cast cost off the per-frame hot path.
+  const dx = player.x - cachedPolyAt.x, dy = player.y - cachedPolyAt.y;
+  if (!cachedPoly || dx * dx + dy * dy > 1) {
+    cachedPoly = computeVisibilityPolygon(player.x, player.y, VISION_RADIUS);
+    cachedPolyAt = { x: player.x, y: player.y };
+  }
+  const polygon = cachedPoly;
+
+  ctx.save();
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.translate(camera.x, camera.y);
+  ctx.scale(camera.zoom, camera.zoom);
+
+  const wx = -camera.x / camera.zoom;
+  const wy = -camera.y / camera.zoom;
+  const ww = window.innerWidth / camera.zoom;
+  const wh = window.innerHeight / camera.zoom;
+
+  // Outer fog: dark everywhere except inside the visibility polygon.
+  ctx.fillStyle = `rgba(0, 0, 0, ${FOG_OPACITY})`;
+  ctx.beginPath();
+  ctx.rect(wx, wy, ww, wh);
+  ctx.moveTo(polygon[0][0], polygon[0][1]);
+  for (let i = 1; i < polygon.length; i++) ctx.lineTo(polygon[i][0], polygon[i][1]);
+  ctx.closePath();
+  ctx.fill('evenodd');
+
+  // Inner falloff: soft radial darkening inside the polygon so vision fades
+  // out far from the player even when no walls block it.
+  const grad = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, VISION_RADIUS);
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  grad.addColorStop(VISION_FALLOFF_START, 'rgba(0, 0, 0, 0)');
+  grad.addColorStop(1, `rgba(0, 0, 0, ${FOG_OPACITY})`);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(polygon[0][0], polygon[0][1]);
+  for (let i = 1; i < polygon.length; i++) ctx.lineTo(polygon[i][0], polygon[i][1]);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ========================
 // DEBUG KEY
 // ========================
 
@@ -198,6 +260,9 @@ function gameLoop(timestamp) {
   player.draw(ctx);
 
   ctx.restore();
+
+  // Vision fog (screen-space radial darkness around player)
+  drawVisionFog();
 
   // Draw HUD
   drawHUD();

@@ -403,32 +403,21 @@ function drawRooms(ctx) {
 
 function drawRoomDetails(ctx, room) {
   ctx.save();
-  // Cafeteria-cluster detail functions were authored in the original
-  // (pre-shift) coordinate space; shift them by +405 to match the new layout.
-  // Other rooms don't have detail functions yet.
   switch (room.name) {
-    case 'Cafeteria':
-      ctx.translate(405, 0);
-      drawCafeteriaDetails(ctx);
-      break;
-    case 'MedBay':
-      ctx.translate(405, 0);
-      drawMedBayDetails(ctx);
-      break;
-    case 'O2':
-      ctx.translate(405, 0);
-      drawO2Details(ctx);
-      break;
-    case 'Weapons':
-      ctx.translate(405, 0);
-      drawWeaponsDetails(ctx);
-      break;
-    case 'Upper Engine':
-      drawEngineDetails(ctx, 345, 240);
-      break;
-    case 'Lower Engine':
-      drawEngineDetails(ctx, 333, 667);
-      break;
+    case 'Cafeteria':      ctx.translate(405, 0); drawCafeteriaDetails(ctx); break;
+    case 'MedBay':         ctx.translate(405, 0); drawMedBayDetails(ctx); break;
+    case 'O2':             ctx.translate(405, 0); drawO2Details(ctx); break;
+    case 'Weapons':        ctx.translate(405, 0); drawWeaponsDetails(ctx); break;
+    case 'Upper Engine':   drawEngineDetails(ctx, 345, 240); break;
+    case 'Lower Engine':   drawEngineDetails(ctx, 333, 667); break;
+    case 'Reactor':        drawReactorDetails(ctx); break;
+    case 'Security':       drawSecurityDetails(ctx); break;
+    case 'Electrical':     drawElectricalDetails(ctx); break;
+    case 'Storage':        drawStorageDetails(ctx); break;
+    case 'Admin':          drawAdminDetails(ctx); break;
+    case 'Navigation':     drawNavigationDetails(ctx); break;
+    case 'Shields':        drawShieldsDetails(ctx); break;
+    case 'Communications': drawCommsDetails(ctx); break;
   }
   ctx.restore();
 }
@@ -524,7 +513,7 @@ function drawCafeteriaDetails(ctx) {
 
 function drawReactorDetails(ctx) {
   // Reactor core (large glowing circle)
-  const cx = 92, cy = 390;
+  const cx = 140, cy = 445;
 
   // Outer glow
   const glow = ctx.createRadialGradient(cx, cy, 10, cx, cy, 45);
@@ -575,14 +564,15 @@ function drawReactorDetails(ctx) {
   ctx.lineTo(cx + 40, cy);
   ctx.stroke();
 
-  // Console panels on sides
-  ctx.fillStyle = '#3a2850';
-  ctx.fillRect(35, 290, 25, 15);
-  ctx.fillRect(35, 470, 25, 15);
-  ctx.fillStyle = '#60a0ff';
-  ctx.fillRect(38, 293, 8, 4);
-  ctx.fillStyle = '#ff6060';
-  ctx.fillRect(50, 293, 8, 4);
+  // Console panels on top/bottom of the chamber
+  for (const [px, py] of [[100, 310], [155, 310], [100, 565], [155, 565]]) {
+    ctx.fillStyle = '#3a2850';
+    ctx.fillRect(px, py, 30, 14);
+    ctx.fillStyle = '#60a0ff';
+    ctx.fillRect(px + 3, py + 3, 10, 4);
+    ctx.fillStyle = '#ff6060';
+    ctx.fillRect(px + 16, py + 3, 10, 4);
+  }
 }
 
 function drawEngineDetails(ctx, cx, cy) {
@@ -635,7 +625,7 @@ function drawEngineDetails(ctx, cx, cy) {
 
 function drawSecurityDetails(ctx) {
   // Security monitor bank
-  const mx = 215, my = 325;
+  const mx = 457, my = 415;
 
   // Monitor desk
   ctx.fillStyle = '#2a3a2a';
@@ -821,58 +811,83 @@ function drawMedBayDetails(ctx) {
 }
 
 function drawElectricalDetails(ctx) {
-  // Wire panels on north wall
+  // Room: x 542-747, y 519-698 (pentagon, center 645, 608).
+  // Wire panels on the north wall
   for (let i = 0; i < 4; i++) {
-    const px = 325 + i * 30, py = 400;
+    const px = 558 + i * 32, py = 540;
     ctx.fillStyle = '#3a3828';
-    ctx.fillRect(px, py, 22, 35);
+    ctx.fillRect(px, py, 24, 32);
     ctx.strokeStyle = '#4a4838';
     ctx.lineWidth = 1;
-    ctx.strokeRect(px, py, 22, 35);
+    ctx.strokeRect(px, py, 24, 32);
+    // Panel highlight
+    ctx.fillStyle = '#5a5840';
+    ctx.fillRect(px + 2, py + 2, 4, 4);
   }
 
-  // Dangling wires
+  // Dangling wires from each panel
   const wireColors = ['#cc3030', '#30cc30', '#3030cc', '#cccc30'];
   for (let i = 0; i < 4; i++) {
     ctx.strokeStyle = wireColors[i];
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    const wx = 335 + i * 30;
-    ctx.moveTo(wx, 435);
-    ctx.quadraticCurveTo(wx + (i % 2 ? 10 : -10), 470, wx + (i % 2 ? -5 : 5), 500);
+    const wx = 570 + i * 32;
+    ctx.moveTo(wx, 572);
+    ctx.quadraticCurveTo(wx + (i % 2 ? 10 : -10), 600, wx + (i % 2 ? -5 : 5), 625);
     ctx.stroke();
   }
 
-  // Main power distributor box
+  // Main power distributor box (right side)
   ctx.fillStyle = '#3a4030';
-  ctx.fillRect(440, 420, 30, 50);
+  ctx.fillRect(700, 600, 32, 56);
   ctx.strokeStyle = '#5a6050';
   ctx.lineWidth = 1;
-  ctx.strokeRect(440, 420, 30, 50);
+  ctx.strokeRect(700, 600, 32, 56);
   // Switches
   ctx.fillStyle = '#60a060';
-  ctx.fillRect(445, 428, 8, 4);
-  ctx.fillRect(445, 436, 8, 4);
+  ctx.fillRect(705, 608, 9, 5);
+  ctx.fillRect(705, 618, 9, 5);
   ctx.fillStyle = '#a06060';
-  ctx.fillRect(457, 428, 8, 4);
-  ctx.fillRect(457, 436, 8, 4);
+  ctx.fillRect(719, 608, 9, 5);
+  ctx.fillRect(719, 618, 9, 5);
+  // Indicator LEDs
+  ctx.fillStyle = '#80ff80';
+  ctx.fillRect(706, 644, 3, 3);
+  ctx.fillRect(713, 644, 3, 3);
+  ctx.fillStyle = '#ff8080';
+  ctx.fillRect(720, 644, 3, 3);
+  ctx.fillRect(727, 644, 3, 3);
 
-  // Floor hazard stripes
+  // Floor hazard stripes near the south wall
+  ctx.save();
   ctx.fillStyle = '#ccaa2040';
-  ctx.fillRect(315, 515, 160, 10);
+  ctx.fillRect(560, 678, 170, 8);
+  ctx.restore();
+
+  // A small toolbox on the floor
+  ctx.fillStyle = '#5a3020';
+  ctx.fillRect(610, 645, 20, 12);
+  ctx.fillStyle = '#7a4030';
+  ctx.fillRect(612, 647, 16, 4);
+  ctx.fillStyle = '#3a2010';
+  ctx.fillRect(617, 644, 6, 3);
 }
 
 function drawStorageDetails(ctx) {
-  // Green crates (various sizes)
+  // Room: x 805-1077, y 566-878 (chamfered bottom corners). Center (940, 720).
+  // Stack of green supply crates clustered in the center
   const crates = [
-    [510, 490, 25, 25], [540, 485, 30, 30],
-    [505, 520, 20, 20], [575, 510, 28, 22],
-    [490, 545, 22, 22],
+    [905, 690, 28, 28], [935, 685, 34, 34],
+    [900, 720, 24, 24], [970, 712, 30, 24],
+    [880, 745, 26, 26], [928, 745, 22, 22],
   ];
   for (const [x, y, w, h] of crates) {
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(x + 2, y + 3, w, h);
     ctx.fillStyle = '#4a6a4a';
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#5a7a5a';
+    ctx.strokeStyle = '#6a8a6a';
     ctx.lineWidth = 1;
     ctx.strokeRect(x, y, w, h);
     // Cross straps
@@ -884,62 +899,109 @@ function drawStorageDetails(ctx) {
     ctx.stroke();
   }
 
-  // Fuel canister
-  ctx.fillStyle = '#4a5a70';
-  ctx.beginPath();
-  ctx.roundRect(620, 530, 15, 25, 4);
-  ctx.fill();
-  ctx.strokeStyle = '#6a7a90';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(620, 530, 15, 25, 4);
-  ctx.stroke();
-
-  // Hazard stripes at bottom
-  ctx.save();
-  ctx.fillStyle = '#ccaa2060';
-  ctx.fillRect(460, 638, 270, 8);
-  ctx.restore();
-}
-
-function drawAdminDetails(ctx) {
-  // Admin map table (the holographic map)
-  const ax = 640, ay = 415;
-
-  // Table base
-  ctx.fillStyle = '#2a1820';
-  ctx.fillRect(ax - 35, ay - 25, 70, 50);
-  ctx.strokeStyle = '#5a2838';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(ax - 35, ay - 25, 70, 50);
-
-  // Map screen (green on dark)
-  ctx.fillStyle = '#0a2010';
-  ctx.fillRect(ax - 30, ay - 20, 60, 40);
-
-  // Mini map shape on screen
-  ctx.fillStyle = '#20a040';
-  ctx.beginPath();
-  // Simplified ship outline
-  ctx.ellipse(ax, ay, 22, 14, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Blinking dots (players on admin map)
-  ctx.fillStyle = '#40ff60';
-  const dots = [[ax - 10, ay - 5], [ax + 5, ay + 3], [ax + 15, ay - 2], [ax - 8, ay + 8]];
-  for (const [dx, dy] of dots) {
+  // Fuel canisters along the right wall
+  for (let i = 0; i < 3; i++) {
+    const x = 1040, y = 600 + i * 36;
+    ctx.fillStyle = '#4a5a70';
     ctx.beginPath();
-    ctx.arc(dx, dy, 1.5, 0, Math.PI * 2);
+    ctx.roundRect(x, y, 18, 28, 4);
+    ctx.fill();
+    ctx.strokeStyle = '#6a7a90';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x, y, 18, 28, 4);
+    ctx.stroke();
+    // Pressure gauge
+    ctx.fillStyle = '#2a3848';
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 8, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#80b8d0';
+    ctx.beginPath();
+    ctx.arc(x + 9, y + 8, 1.5, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // ID card reader on wall
+  // A "vault" or large container against the left wall
+  ctx.fillStyle = '#5a4830';
+  ctx.fillRect(820, 690, 36, 60);
+  ctx.strokeStyle = '#7a6840';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(820, 690, 36, 60);
+  // Locks
+  ctx.fillStyle = '#3a2818';
+  ctx.fillRect(823, 698, 30, 5);
+  ctx.fillRect(823, 740, 30, 5);
+  ctx.fillStyle = '#aa8830';
+  ctx.beginPath();
+  ctx.arc(838, 720, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Floor hazard stripes near the south chamfer
+  ctx.save();
+  ctx.fillStyle = '#ccaa2060';
+  ctx.fillRect(845, 858, 195, 8);
+  // Diagonal warning chevrons
+  ctx.fillStyle = '#1a1a18';
+  for (let i = 0; i < 8; i++) {
+    ctx.fillRect(850 + i * 24, 858, 12, 8);
+  }
+  ctx.restore();
+
+  // A few smaller boxes scattered
+  ctx.fillStyle = '#3a4a3a';
+  ctx.fillRect(870, 605, 18, 18);
+  ctx.strokeStyle = '#5a6a5a';
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(870, 605, 18, 18);
+}
+
+function drawAdminDetails(ctx) {
+  // Room: x 1090-1219, y 431-603 (pentagon, center 1154, 517).
+
+  // Three chairs along the back (north) wall
+  for (let i = 0; i < 3; i++) {
+    const cx = 1110 + i * 32, cy = 472;
+    ctx.fillStyle = '#702030';
+    ctx.fillRect(cx - 8, cy - 8, 16, 16);
+    ctx.fillStyle = '#902838';
+    ctx.fillRect(cx - 6, cy - 10, 12, 4);   // chair back
+  }
+
+  // Holographic map table (south-center)
+  const ax = 1154, ay = 545;
+  // Table base
+  ctx.fillStyle = '#2a1820';
+  ctx.fillRect(ax - 36, ay - 22, 72, 44);
+  ctx.strokeStyle = '#5a2838';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(ax - 36, ay - 22, 72, 44);
+  // Map screen
+  ctx.fillStyle = '#0a2010';
+  ctx.fillRect(ax - 32, ay - 18, 64, 36);
+  // Ship outline on screen
+  ctx.fillStyle = '#20a040';
+  ctx.beginPath();
+  ctx.ellipse(ax, ay, 24, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Blinking dots (players)
+  ctx.fillStyle = '#40ff60';
+  for (const [dx, dy] of [[ax - 12, ay - 4], [ax + 6, ay + 3], [ax + 14, ay - 3], [ax - 6, ay + 6]]) {
+    ctx.beginPath();
+    ctx.arc(dx, dy, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ID card reader on the right wall
   ctx.fillStyle = '#5a4050';
-  ctx.fillRect(720, 380, 20, 30);
+  ctx.fillRect(1198, 495, 14, 28);
   ctx.fillStyle = '#206020';
-  ctx.fillRect(723, 385, 14, 5);
+  ctx.fillRect(1200, 500, 10, 5);
   ctx.fillStyle = '#40a040';
-  ctx.fillRect(723, 395, 14, 2);
+  ctx.fillRect(1200, 510, 10, 2);
+  // Slot
+  ctx.fillStyle = '#1a0a0a';
+  ctx.fillRect(1200, 515, 10, 2);
 }
 
 function drawWeaponsDetails(ctx) {
@@ -1002,59 +1064,85 @@ function drawWeaponsDetails(ctx) {
 }
 
 function drawNavigationDetails(ctx) {
-  // Large front viewport (the pointed window at the front of the ship)
-  const vx = 1020, vy = 390;
+  // Room: pointed pentagon (1546-1755 wide, 361-511 tall). Center (1646, 436).
+  // Pointed front viewport (the ship's prow) on the right.
+  const vx = 1700, vy = 436;
   ctx.fillStyle = '#1a2a3a';
   ctx.beginPath();
-  ctx.moveTo(vx, vy - 35);
-  ctx.lineTo(vx + 35, vy);
-  ctx.lineTo(vx, vy + 35);
+  ctx.moveTo(vx, vy - 30);
+  ctx.lineTo(vx + 38, vy);
+  ctx.lineTo(vx, vy + 30);
   ctx.closePath();
   ctx.fill();
+  ctx.strokeStyle = '#3a5a7a';
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
-  // Stars visible through viewport
-  ctx.fillStyle = '#ffffff80';
-  const stars = [[vx + 5, vy - 15], [vx + 15, vy + 5], [vx + 10, vy - 5], [vx + 20, vy + 10]];
-  for (const [sx, sy] of stars) {
+  // Stars visible through the viewport
+  ctx.fillStyle = '#ffffffa0';
+  for (const [sx, sy] of [[vx + 6, vy - 14], [vx + 16, vy + 6], [vx + 11, vy - 5], [vx + 22, vy + 9], [vx + 8, vy + 14]]) {
     ctx.beginPath();
-    ctx.arc(sx, sy, 1, 0, Math.PI * 2);
+    ctx.arc(sx, sy, 1.1, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Steering console
-  const cx = 975, cy = 395;
+  // Steering console (curved bench facing the viewport)
+  const cx = 1620, cy = 436;
   ctx.fillStyle = '#2a3a4a';
-  ctx.fillRect(cx - 25, cy - 12, 50, 28);
-  ctx.fillStyle = '#304858';
-  ctx.fillRect(cx - 20, cy - 8, 40, 8);
+  ctx.fillRect(cx - 30, cy - 14, 56, 30);
+  ctx.strokeStyle = '#4a6080';
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(cx - 30, cy - 14, 56, 30);
+  // Console screens
+  ctx.fillStyle = '#1a3858';
+  ctx.fillRect(cx - 26, cy - 10, 22, 9);
+  ctx.fillStyle = '#1a3868';
+  ctx.fillRect(cx + 0, cy - 10, 22, 9);
   ctx.fillStyle = '#306888';
-  ctx.fillRect(cx - 20, cy + 4, 40, 8);
-
+  ctx.fillRect(cx - 26, cy + 2, 48, 9);
   // Status lights
   ctx.fillStyle = '#40cc40';
-  ctx.beginPath(); ctx.arc(cx - 10, cy - 3, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx - 12, cy - 6, 1.8, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#cccc40';
-  ctx.beginPath(); ctx.arc(cx, cy - 3, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + 4, cy - 6, 1.8, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#cc4040';
-  ctx.beginPath(); ctx.arc(cx + 10, cy - 3, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + 18, cy - 6, 1.8, 0, Math.PI * 2); ctx.fill();
 
-  // Navigation map on left wall
+  // Pilot chair facing the viewport
+  ctx.fillStyle = '#3a3a4a';
+  ctx.beginPath();
+  ctx.arc(cx - 50, cy, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#5a5a6a';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Navigation chart on the left wall (top)
   ctx.fillStyle = '#1a2028';
-  ctx.fillRect(930, 280, 30, 25);
+  ctx.fillRect(1560, 380, 36, 28);
   ctx.fillStyle = '#203040';
-  ctx.fillRect(932, 282, 26, 21);
-  // Chart lines
-  ctx.strokeStyle = '#405060';
+  ctx.fillRect(1562, 382, 32, 24);
+  ctx.strokeStyle = '#506070';
   ctx.lineWidth = 0.5;
   ctx.beginPath();
-  ctx.moveTo(935, 290); ctx.lineTo(955, 285);
-  ctx.moveTo(940, 298); ctx.lineTo(952, 295);
+  ctx.moveTo(1565, 392); ctx.lineTo(1590, 387);
+  ctx.moveTo(1568, 398); ctx.lineTo(1590, 396);
   ctx.stroke();
+
+  // Communications panel on the left wall (bottom)
+  ctx.fillStyle = '#2a3848';
+  ctx.fillRect(1560, 462, 36, 24);
+  ctx.fillStyle = '#406888';
+  ctx.fillRect(1562, 465, 16, 5);
+  ctx.fillStyle = '#883030';
+  ctx.fillRect(1580, 465, 14, 5);
+  ctx.fillStyle = '#80a0c0';
+  ctx.fillRect(1562, 472, 32, 3);
 }
 
 function drawShieldsDetails(ctx) {
   // Shield hexagonal generator
-  const sx = 835, sy = 558;
+  const sx = 1377, sy = 691;
 
   // Outer ring
   ctx.strokeStyle = '#6060a0';
@@ -1088,15 +1176,31 @@ function drawShieldsDetails(ctx) {
   ctx.arc(sx, sy, 12, 0, Math.PI * 2);
   ctx.fill();
 
-  // Shield status lights around the outside
-  for (let i = 0; i < 7; i++) {
-    const a = (i / 7) * Math.PI * 2;
-    const lx = sx + Math.cos(a) * 28;
-    const ly = sy + Math.sin(a) * 28;
-    ctx.fillStyle = i < 5 ? '#40a040' : '#a04040';
+  // Shield status lights around the outside (the Skeld task — green = active)
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const lx = sx + Math.cos(a) * 32;
+    const ly = sy + Math.sin(a) * 32;
+    ctx.fillStyle = i < 6 ? '#40c040' : '#a04040';
     ctx.beginPath();
-    ctx.arc(lx, ly, 2.5, 0, Math.PI * 2);
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = '#1a1a28';
+    ctx.lineWidth = 0.6;
+    ctx.stroke();
+  }
+
+  // Side consoles flanking the generator
+  for (const px of [1290, 1450]) {
+    ctx.fillStyle = '#2a2848';
+    ctx.fillRect(px - 12, 670, 24, 14);
+    ctx.strokeStyle = '#5050a0';
+    ctx.lineWidth = 0.8;
+    ctx.strokeRect(px - 12, 670, 24, 14);
+    ctx.fillStyle = '#80a0ff';
+    ctx.fillRect(px - 9, 673, 18, 4);
+    ctx.fillStyle = '#a08040';
+    ctx.fillRect(px - 9, 679, 18, 3);
   }
 }
 
@@ -1181,30 +1285,72 @@ function drawO2Details(ctx) {
 }
 
 function drawCommsDetails(ctx) {
-  // Communications console
+  // Room: x 1115-1259, y 726-836, slanted top-right corner. Center (1187, 781).
+
+  // Main console along the south wall
   ctx.fillStyle = '#2a3a3a';
-  ctx.fillRect(555, 680, 55, 28);
-  ctx.fillStyle = '#304848';
-  ctx.fillRect(558, 683, 20, 10);
-  ctx.fillStyle = '#484830';
-  ctx.fillRect(582, 683, 20, 10);
+  ctx.fillRect(1135, 798, 110, 28);
+  ctx.strokeStyle = '#5a7878';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(1135, 798, 110, 28);
+  // Two screens
+  ctx.fillStyle = '#1a3030';
+  ctx.fillRect(1140, 803, 40, 18);
+  ctx.fillRect(1185, 803, 40, 18);
+  // Screen glow / waveform
+  ctx.fillStyle = '#40b890';
+  for (let i = 0; i < 8; i++) {
+    const h = 4 + (i % 3) * 3;
+    ctx.fillRect(1142 + i * 5, 815 - h, 3, h);
+  }
+  ctx.fillStyle = '#a0c060';
+  ctx.fillRect(1188, 806, 36, 1.5);
+  ctx.fillRect(1188, 814, 36, 1.5);
 
-  // Radio equipment
+  // Radio rack on the west wall
   ctx.fillStyle = '#3a3a4a';
-  ctx.fillRect(540, 660, 20, 25);
+  ctx.fillRect(1124, 745, 26, 40);
+  ctx.strokeStyle = '#5a5a6a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(1124, 745, 26, 40);
+  // Knobs
   ctx.fillStyle = '#cc4040';
-  ctx.beginPath();
-  ctx.arc(550, 670, 3, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(1133, 754, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#40c040';
+  ctx.beginPath(); ctx.arc(1142, 754, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#a0a0a0';
+  ctx.fillRect(1128, 762, 18, 2);
+  ctx.fillRect(1128, 768, 18, 2);
+  ctx.fillRect(1128, 774, 18, 2);
 
-  // Antenna
-  ctx.strokeStyle = '#6a6a7a';
-  ctx.lineWidth = 1.5;
+  // Antenna sprouting up from the radio
+  ctx.strokeStyle = '#7a7a8a';
+  ctx.lineWidth = 1.4;
   ctx.beginPath();
-  ctx.moveTo(550, 660);
-  ctx.lineTo(548, 648);
-  ctx.lineTo(552, 648);
+  ctx.moveTo(1137, 745);
+  ctx.lineTo(1133, 730);
+  ctx.lineTo(1141, 730);
   ctx.stroke();
+
+  // Operator chair in front of the console
+  ctx.fillStyle = '#3a3a4a';
+  ctx.beginPath();
+  ctx.arc(1187, 778, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#5a5a6a';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Server cabinet by the slanted top-right
+  ctx.fillStyle = '#2a3838';
+  ctx.fillRect(1232, 745, 22, 36);
+  // Indicator LEDs
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i % 2 ? '#40ff80' : '#80c0ff';
+    ctx.fillRect(1235, 749 + i * 7, 3, 3);
+    ctx.fillStyle = '#406080';
+    ctx.fillRect(1241, 749 + i * 7, 10, 3);
+  }
 }
 
 // ========================
