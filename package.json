@@ -2,11 +2,20 @@
   "name": "among-us-claude",
   "version": "0.1.0",
   "description": "Among Us game simulation with AI agents",
+  "type": "module",
   "scripts": {
-    "dev": "npx vite",
+    "dev": "concurrently -k -n server,vite -c yellow,cyan \"npm:server\" \"npx vite\"",
+    "vite": "npx vite",
+    "server": "node server.js",
     "build": "npx vite build"
   },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  },
   "devDependencies": {
+    "concurrently": "^9.0.1",
     "vite": "^5.4.0"
   }
 }
