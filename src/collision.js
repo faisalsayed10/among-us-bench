@@ -49,14 +49,15 @@ for (const hall of hallways) {
   });
 }
 
-// Bridge zones at room/hallway junctions.
+// Bridge zones at room/hallway junctions where polygon overlap is too narrow
+// (typically where a hex/octagon room meets a rectangular corridor and only a
+// diagonal vertex pokes into the corridor).
 const bridgeZones = [
-  // Cafeteria <-> left corridor
-  [340, 215, 20, 50],
-  // Corridor <-> medbay fork
-  [218, 265, 45, 15],
-  // Medbay fork <-> MedBay
-  [218, 315, 45, 15],
+  // H-Cafe-Left corridor <-> Upper Engine east tip.
+  // Hallway ends at x=435; engine's right vertex sits at (445,240) with
+  // diagonal edges that pinch the doorway down to ~30px. This bridge widens
+  // the junction so the collision circle can pass without snagging.
+  [395, 210, 50, 60],
 ];
 
 for (const [x, y, w, h] of bridgeZones) {
@@ -68,11 +69,30 @@ for (const [x, y, w, h] of bridgeZones) {
 }
 
 // ========================
+// DYNAMIC BLOCKERS
+// ========================
+// Runtime rectangles that subtract from walkability — used for closed doors.
+// Kept separate from walkableZones so we don't have to invalidate the static
+// geometry cache when a door state changes.
+
+let extraBlockers = [];
+export function setExtraBlockers(blockers) { extraBlockers = blockers; }
+
+/** True if (x, y) is inside any dynamic blocker (e.g. a closed door). */
+export function isBlocked(x, y) {
+  for (const b of extraBlockers) {
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return true;
+  }
+  return false;
+}
+
+// ========================
 // PUBLIC API
 // ========================
 
-/** Check if a single point is inside any walkable zone */
+/** Check if a single point is inside any walkable zone, minus dynamic blockers. */
 export function isWalkable(x, y) {
+  if (isBlocked(x, y)) return false;
   for (const zone of walkableZones) {
     if (pointInPolygon(x, y, zone.polygon)) return true;
   }
@@ -102,9 +122,25 @@ export function canStandAt(x, y) {
  */
 export function resolveMovement(cx, cy, nx, ny) {
   if (canStandAt(nx, ny)) return { x: nx, y: ny };
-  if (canStandAt(nx, cy)) return { x: nx, y: cy };
-  if (canStandAt(cx, ny)) return { x: cx, y: ny };
-  return { x: cx, y: cy };
+
+  const xOk = canStandAt(nx, cy);
+  const yOk = canStandAt(cx, ny);
+  if (xOk && yOk) {
+    return Math.abs(nx - cx) >= Math.abs(ny - cy) ? { x: nx, y: cy } : { x: cx, y: ny };
+  }
+  if (xOk) return { x: nx, y: cy };
+  if (yOk) return { x: cx, y: ny };
+
+  // Diagonal wall: binary-search the furthest fraction of the step that fits.
+  // Without this, players lock against 45° walls because neither axis slide
+  // can succeed.
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 6; i++) {
+    const mid = (lo + hi) / 2;
+    if (canStandAt(cx + (nx - cx) * mid, cy + (ny - cy) * mid)) lo = mid;
+    else hi = mid;
+  }
+  return { x: cx + (nx - cx) * lo, y: cy + (ny - cy) * lo };
 }
 
 /**

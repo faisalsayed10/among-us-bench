@@ -8,6 +8,10 @@
 import { isWalkable, getWalkableZones } from './collision.js';
 
 let cachedWalls = null;
+let extraWalls = [];
+
+/** Set the dynamic wall list — typically the edges of currently-closed doors. */
+export function setExtraWalls(walls) { extraWalls = walls; }
 
 function buildWalls() {
   const zones = getWalkableZones();
@@ -56,7 +60,9 @@ function buildWalls() {
 
 export function getWalls() {
   if (!cachedWalls) cachedWalls = buildWalls();
-  return cachedWalls;
+  // Dynamic walls (closed doors) are appended each query — cheap, and avoids
+  // touching the cached static wall list.
+  return extraWalls.length ? [...cachedWalls, ...extraWalls] : cachedWalls;
 }
 
 function raySegment(ox, oy, dx, dy, x1, y1, x2, y2) {
