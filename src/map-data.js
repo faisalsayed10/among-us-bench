@@ -249,7 +249,13 @@ export const hallways = [
   { name: 'H-LowerEng-South',     polygon: [[455, 691], [506, 691], [506, 779], [455, 779]] },
   { name: 'H-Bottom',             polygon: [[455, 729], [805, 729], [805, 779], [455, 779]] },
   { name: 'H-Electrical-South',   polygon: [[620, 696], [670, 696], [670, 733], [620, 733]] },
-  { name: 'H-Cafe-Storage',       polygon: [[926, 430], [980, 430], [980, 570], [926, 570]] },
+  // Top corners chamfered where the corridor meets Cafeteria's south wall.
+  // The original 90° inside-corner at (980,440) trapped agents pressed against
+  // the south wall just east of the opening: their collision circle wouldn't
+  // fit, the wall ran perpendicular to their southward intent, and tangent
+  // slide produced zero motion. The 10px diagonal lip gives the slide a real
+  // direction to ride into the corridor.
+  { name: 'H-Cafe-Storage',       polygon: [[926, 430], [980, 430], [990, 440], [990, 570], [916, 570], [916, 440]] },
   { name: 'H-Storage-Admin',      polygon: [[970, 476], [1108, 476], [1108, 526], [970, 526]] },
   { name: 'H-Storage-Comms',      polygon: [[1075, 653], [1303, 653], [1303, 705], [1075, 705]] },
   { name: 'H-Comms-Shields',      polygon: [[1184, 702], [1234, 702], [1234, 730], [1184, 730]] },

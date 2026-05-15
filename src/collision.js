@@ -131,16 +131,60 @@ export function resolveMovement(cx, cy, nx, ny) {
   if (xOk) return { x: nx, y: cy };
   if (yOk) return { x: cx, y: ny };
 
-  // Diagonal wall: binary-search the furthest fraction of the step that fits.
-  // Without this, players lock against 45° walls because neither axis slide
-  // can succeed.
+  // Both axis slides failed — we're pressed against an arbitrarily-oriented
+  // wall (e.g. the slanted edges of cafeteria's octagon). Approximate the
+  // outward wall normal by sampling isWalkable around the current point, then
+  // project the desired step onto the tangent so the player slides along the
+  // wall instead of locking in place.
+  const dx = nx - cx, dy = ny - cy;
+  const stepLen = Math.hypot(dx, dy);
+  if (stepLen < 1e-6) return { x: cx, y: cy };
+
+  const probe = COLLISION_RADIUS + 2;
+  let nxNorm = 0, nyNorm = 0;
+  const SAMPLES = 12;
+  for (let i = 0; i < SAMPLES; i++) {
+    const a = (i / SAMPLES) * Math.PI * 2;
+    const sx = cx + Math.cos(a) * probe;
+    const sy = cy + Math.sin(a) * probe;
+    if (!isWalkable(sx, sy)) {
+      // Sample lies inside a wall — accumulate outward (away-from-wall) direction.
+      nxNorm -= Math.cos(a);
+      nyNorm -= Math.sin(a);
+    }
+  }
+  const nMag = Math.hypot(nxNorm, nyNorm);
+  if (nMag > 1e-6) {
+    nxNorm /= nMag; nyNorm /= nMag;
+    // Tangent = step direction minus its projection onto the wall normal.
+    const proj = dx * nxNorm + dy * nyNorm;
+    let tx = dx - proj * nxNorm;
+    let ty = dy - proj * nyNorm;
+    const tMag = Math.hypot(tx, ty);
+    if (tMag > 1e-6) {
+      // Preserve step length along the wall.
+      tx = (tx / tMag) * stepLen;
+      ty = (ty / tMag) * stepLen;
+      if (canStandAt(cx + tx, cy + ty)) return { x: cx + tx, y: cy + ty };
+      // Tangent step blocked too (corner case) — back off via binary search.
+      let lo = 0, hi = 1;
+      for (let i = 0; i < 6; i++) {
+        const mid = (lo + hi) / 2;
+        if (canStandAt(cx + tx * mid, cy + ty * mid)) lo = mid;
+        else hi = mid;
+      }
+      if (lo > 0) return { x: cx + tx * lo, y: cy + ty * lo };
+    }
+  }
+
+  // Fallback: binary-search along the original diagonal.
   let lo = 0, hi = 1;
   for (let i = 0; i < 6; i++) {
     const mid = (lo + hi) / 2;
-    if (canStandAt(cx + (nx - cx) * mid, cy + (ny - cy) * mid)) lo = mid;
+    if (canStandAt(cx + dx * mid, cy + dy * mid)) lo = mid;
     else hi = mid;
   }
-  return { x: cx + (nx - cx) * lo, y: cy + (ny - cy) * lo };
+  return { x: cx + dx * lo, y: cy + dy * lo };
 }
 
 /**

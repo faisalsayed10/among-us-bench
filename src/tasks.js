@@ -7,7 +7,10 @@
 import { tasks as TASK_DEFS } from './map-data.js';
 
 export const TASK_INTERACT_RADIUS = 30;
-export const TASK_DURATION = 4; // seconds of hold-E to complete
+// Longer task duration means crewmates can't speed-run their checklist and
+// have to actually stand vulnerable for a meaningful time. Also slows the
+// game so deception has room to breathe.
+export const TASK_DURATION = 8; // seconds of hold-E to complete
 
 let nextTaskInstanceId = 1;
 
@@ -29,8 +32,8 @@ function shuffle(arr) {
 export function assignTasksToPlayers(players, tasksPerPlayer = 4) {
   const instances = [];
   for (const p of players) {
-    if (p.role !== 'crewmate') continue;
     const picks = shuffle(TASK_DEFS).slice(0, tasksPerPlayer);
+    const fake = p.role === 'impostor';
     for (const def of picks) {
       instances.push({
         id: nextTaskInstanceId++,
@@ -38,6 +41,7 @@ export function assignTasksToPlayers(players, tasksPerPlayer = 4) {
         def,                       // {x, y, room, type, name}
         progress: 0,               // 0..1
         completed: false,
+        fake,                      // impostor's fake-task list — looks identical, never completes
         lastProgressedAt: -Infinity, // sim time of last progress tick (for decay)
       });
     }
@@ -68,8 +72,9 @@ export function findActiveTask(allTasks, player) {
 
 /** Global completion ratio across all assigned tasks. */
 export function globalProgress(allTasks) {
-  if (allTasks.length === 0) return 0;
+  const real = allTasks.filter(t => !t.fake);
+  if (real.length === 0) return 0;
   let sum = 0;
-  for (const t of allTasks) sum += t.completed ? 1 : t.progress;
-  return sum / allTasks.length;
+  for (const t of real) sum += t.completed ? 1 : t.progress;
+  return sum / real.length;
 }

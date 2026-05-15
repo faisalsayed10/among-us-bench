@@ -83,7 +83,10 @@ export class Player {
     const nx = this.x + dx * MOVE_SPEED * dt;
     const ny = this.y + dy * MOVE_SPEED * dt;
 
-    const result = resolveMovement(this.x, this.y, nx, ny);
+    // Ghosts pass through walls — matches Among Us spectator movement.
+    const result = this.alive
+      ? resolveMovement(this.x, this.y, nx, ny)
+      : { x: nx, y: ny };
     const moved = Math.hypot(result.x - this.x, result.y - this.y);
     // Animate only when actually moving — otherwise a player held against a
     // wall (or an AI commanded into one) looks like they're running on the spot.

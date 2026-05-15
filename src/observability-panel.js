@@ -58,7 +58,9 @@ export class ObservabilityPanel {
 
       const traceList = traces.get(p.name) || [];
       const lastTrace = traceList[traceList.length - 1];
-      const monologue = lastTrace?.monologue || '';
+      const intent = lastTrace?.intent || '';
+      const tom = lastTrace?.theoryOfMind || '';
+      const monologue = [intent, tom].filter(Boolean).join(' • ');
       const error = lastTrace?.error || '';
 
       const actionLabel = isSelf ? '(you — manual)' : describeAction(action);
@@ -68,7 +70,10 @@ export class ObservabilityPanel {
       return `<div class="agent-card ${p.alive ? '' : 'dead'} ${isSelf ? 'self' : ''}">
         <div class="ac-head">
           <div class="ac-avatar" style="background:${p.color}"></div>
-          <div class="ac-name">${escapeHtml(p.name)}${isSelf ? ' (you)' : ''}</div>
+          <div class="ac-name">${escapeHtml(p.name)}${isSelf ? ' (you)' : ''}${(() => {
+            const m = (typeof window !== 'undefined' && window.__agentModels) ? window.__agentModels.get(p.name) : null;
+            return m ? ` <span class="ac-model">${escapeHtml(m.label)}</span>` : '';
+          })()}</div>
           <div class="ac-role ${roleClass}">${roleLabel}</div>
           ${p.alive ? '' : '<div class="ac-dead">DEAD</div>'}
         </div>
