@@ -34,13 +34,6 @@ app.post('/api/decide', async (req, res) => {
     return res.status(400).json({ error: 'messages required' });
   }
 
-  // Prompt caching: the system prompt is ~1.5K tokens and identical every
-  // call for a given agent. Anthropic and a handful of others on OpenRouter
-  // support `cache_control: { type: "ephemeral" }` marker on a content block
-  // — cached prefix reads are ~90% cheaper. For providers that don't support
-  // it, the field is silently ignored. We only opt in when the provider is
-  // known to honor it, to avoid the structured-content format breaking
-  // simpler backends.
   const supportsCaching = /^(anthropic|google)\//.test(model);
 
   let systemBlock = null;
