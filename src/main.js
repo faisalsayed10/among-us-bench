@@ -10,6 +10,7 @@ import { computeVisibilityPolygon } from './visibility.js';
 import { tasksForPlayer } from './tasks.js';
 import { MeetingUI } from './meeting-ui.js';
 import { ObservabilityPanel } from './observability-panel.js';
+import { GameMetrics } from './metrics.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -20,7 +21,8 @@ const ctx = canvas.getContext('2d');
 
 const game = new GameState();
 
-const human = new Player({ name: 'You', color: '#c42b3b', spawnRoom: 'Cafeteria' });
+// Human gets a normal color name so agents can't tell them apart from NPCs.
+const human = new Player({ name: 'Red', color: '#c42b3b', spawnRoom: 'Cafeteria' });
 game.addPlayer(human, new HumanController(human), { local: true });
 
 // Placeholder NPCs — validates multi-player rendering and visibility occlusion.
@@ -83,17 +85,90 @@ console.log('[setup] impostors:',
 // ========================
 // Every NPC is driven by an LLMBrain via the local /api/decide proxy.
 // Without the proxy running, agents will fail every decide and just stand
-// still — the console will log it. Change LLM_MODEL to swap models.
+// still — the console will log it.
+//
+// Each NPC is randomly assigned a distinct model from MODEL_POOL. The
+// mapping is hidden from agents (they only see character colors/names) but
+// surfaced to us via window.__agentModels for the observability panel.
 
-const LLM_MODEL = 'anthropic/claude-sonnet-4';
+const MODEL_POOL = [
+  { slug: 'anthropic/claude-opus-4.7',       label: 'Claude Opus 4.7' },
+  { slug: 'openai/gpt-5.5',                  label: 'GPT-5.5' },
+  { slug: 'x-ai/grok-4.3',                   label: 'Grok 4.3' },
+  { slug: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
+  { slug: 'google/gemini-3.1-pro-preview',   label: 'Gemini 3.1 Pro' },
+  { slug: 'anthropic/claude-haiku-4.5',      label: 'Claude Haiku 4.5' },
+  { slug: 'deepseek/deepseek-v3.2',          label: 'DeepSeek V3.2' },
+  { slug: 'qwen/qwen3-max',                  label: 'Qwen3 Max' },
+  { slug: 'anthropic/claude-sonnet-4.6',     label: 'Claude Sonnet 4.6' },
+  { slug: 'xiaomi/mimo-v2-pro',              label: 'MiMo v2 Pro' },
+];
+
+function shuffled(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+const modelDeck = shuffled(MODEL_POOL);
+
+// Human-only mapping of character name → model. Never passed to agents.
+window.__agentModels = new Map();
 
 // Trace log keyed by player name — read by the observability panel.
 window.__agentTraces = new Map();
+
+// ----- Token cost meter ----------------------------------------------------
+// Prices in USD per 1M tokens, mirroring OpenRouter. Cached input is 10% of
+// list (Anthropic). Unknown models default to a conservative $1 / $5.
+const PRICING = {
+  'anthropic/claude-opus-4.7':         { in: 5,    out: 25   },
+  'openai/gpt-5.5':                    { in: 5,    out: 30   },
+  'x-ai/grok-4.3':                     { in: 1.25, out: 2.5  },
+  'anthropic/claude-sonnet-4.6':       { in: 3,    out: 15   },
+  'anthropic/claude-haiku-4.5':        { in: 1,    out: 5    },
+  'google/gemini-3.1-pro-preview':     { in: 2,    out: 12   },
+  'mistralai/mistral-medium-3-5':      { in: 1.5,  out: 7.5  },
+  'meta-llama/llama-3.3-70b-instruct': { in: 0.07, out: 0.30 },
+  'deepseek/deepseek-v3.2':            { in: 0.27, out: 1.10 },
+  'qwen/qwen3-max':                    { in: 1.2,  out: 6    },
+  'qwen/qwen3.5-9b':                   { in: 0.04, out: 0.15 },
+  'moonshotai/kimi-k2.6':              { in: 0.74, out: 3.5  },
+  'xiaomi/mimo-v2-pro':                { in: 1,    out: 3    },
+};
+
+window.__totalCostUsd = 0;
+window.__costByModel = {};
+
+function costOf(model, usage) {
+  const p = PRICING[model] || { in: 1, out: 5 };
+  const inTotal = usage?.prompt_tokens ?? usage?.input_tokens ?? 0;
+  const cached  = usage?.prompt_tokens_details?.cached_tokens ?? usage?.cache_read_input_tokens ?? 0;
+  const out     = usage?.completion_tokens ?? usage?.output_tokens ?? 0;
+  const billedIn = Math.max(0, inTotal - cached);
+  return (billedIn * p.in + cached * p.in * 0.1 + out * p.out) / 1_000_000;
+}
+
+const costMeterEl = document.getElementById('cost-meter');
+function updateCostMeter() {
+  if (costMeterEl) costMeterEl.textContent = `$${window.__totalCostUsd.toFixed(3)}`;
+}
+
 const onTrace = (entry) => {
   const list = window.__agentTraces.get(entry.name) || [];
   list.push(entry);
   if (list.length > 50) list.shift();
   window.__agentTraces.set(entry.name, list);
+
+  if (entry.usage && entry.model) {
+    const c = costOf(entry.model, entry.usage);
+    window.__totalCostUsd += c;
+    window.__costByModel[entry.model] = (window.__costByModel[entry.model] || 0) + c;
+    updateCostMeter();
+  }
 };
 
 (async () => {
@@ -101,18 +176,24 @@ const onTrace = (entry) => {
     const r = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
     const j = await r.json();
     if (!j?.ok || !j.hasKey) console.warn('[brains] /api/health reported no key — agents will idle.');
-    else console.log(`[brains] LLM mode (${LLM_MODEL})`);
+    else {
+      console.log('[brains] LLM mode — model assignments:');
+      for (const [name, m] of window.__agentModels) console.log(`  ${name} → ${m.label} (${m.slug})`);
+    }
   } catch {
     console.warn('[brains] proxy not reachable at /api/health — start it with `npm run server`. Agents will idle.');
   }
 })();
 
-for (const p of npcs) {
+for (let i = 0; i < npcs.length; i++) {
+  const p = npcs[i];
   const teammates = p.role === 'impostor'
     ? game.players.filter(q => q.role === 'impostor' && q.id !== p.id).map(q => q.name)
     : [];
+  const assigned = modelDeck[i % modelDeck.length];
+  window.__agentModels.set(p.name, assigned);
   const brain = new LLMBrain({
-    model: LLM_MODEL,
+    model: assigned.slug,
     name: p.name,
     role: p.role,
     color: p.color,
@@ -128,6 +209,9 @@ let eHeld = false;
 
 const meetingUI = new MeetingUI(game);
 const observabilityPanel = new ObservabilityPanel(game);
+const metrics = new GameMetrics(game, {
+  getModelFor: (name) => window.__agentModels?.get(name) ?? null,
+});
 
 let camera = { x: 0, y: 0, zoom: 1 };
 let lastTime = 0;
@@ -213,7 +297,7 @@ function drawHUD() {
         ? '  |  6: next vent  7: exit vent'
         : '  |  1: lights  2: reactor  3: o2  4: close door  5: enter vent')
     : '';
-  ctx.fillText(`WASD to move  |  E: interact${sabHint}  |  F3 debug`, padding, window.innerHeight - padding);
+  ctx.fillText(`WASD to move  |  E: interact  |  Q: emergency meeting (Cafeteria, once)${sabHint}  |  F3 debug`, padding, window.innerHeight - padding);
 
   ctx.restore();
 }
@@ -274,6 +358,8 @@ let cachedPolyAt = { x: -9999, y: -9999, r: -1, doors: -1 };
 function drawVisionFog() {
   const local = game.getLocalPlayer();
   if (!local) return;
+  // Ghosts see the entire map — no fog while spectating.
+  if (!local.alive) return;
 
   // Vision radius depends on current sabotage state + role.
   const VISION_RADIUS = game.getVisionRadius(local);
@@ -623,18 +709,51 @@ function drawGlobalTaskBar() {
   ctx.restore();
 }
 
-function drawEndScreen() {
-  if (game.phase !== 'ended') return;
-  ctx.save();
-  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-  ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-  const crewWon = game.winner === 'crewmates';
-  ctx.fillStyle = crewWon ? '#67e8a3' : '#e84855';
-  ctx.font = 'bold 48px "Segoe UI", Arial, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(crewWon ? 'CREWMATES WIN' : 'IMPOSTORS WIN', window.innerWidth / 2, window.innerHeight / 2 - 20);
-  ctx.restore();
+// HTML end-game overlay (richer than the old canvas text — has stats + buttons).
+const endgameEl       = document.getElementById('endgame-overlay');
+const endgameWinnerEl = document.getElementById('endgame-winner');
+const endgameReasonEl = document.getElementById('endgame-reason');
+const endgameStatsEl  = document.getElementById('endgame-stats');
+const endgameRestart  = document.getElementById('endgame-restart');
+if (endgameRestart) endgameRestart.addEventListener('click', () => location.reload());
+
+let _endgameShown = false;
+function updateEndgameOverlay() {
+  if (game.phase !== 'ended') {
+    if (_endgameShown) { endgameEl.classList.add('hidden'); _endgameShown = false; }
+    return;
+  }
+  if (_endgameShown) return;
+  _endgameShown = true;
+
+  const winner = game.winner; // 'crewmates' | 'impostors' | 'draw' | null
+  const label = winner === 'crewmates' ? 'CREWMATES WIN'
+              : winner === 'impostors' ? 'IMPOSTORS WIN'
+              : 'DRAW';
+  endgameWinnerEl.textContent = label;
+  endgameWinnerEl.className = `endgame-winner ${winner === 'crewmates' ? 'crew' : winner === 'impostors' ? 'impostor' : 'draw'}`;
+
+  // Reason: pull from the game-end event if present.
+  const endEv = [...game.events].reverse().find(e => e.type === 'game-end');
+  endgameReasonEl.textContent = endEv?.reason ? `reason: ${endEv.reason}` : '';
+
+  // Stats: kills, meetings, top deceiver (by witnessFlipsInflicted or kills).
+  const totalKills = game.events.filter(e => e.type === 'kill').length;
+  const totalMeetings = game.pastMeetings.length;
+  const innocentEjections = game.pastMeetings.filter(m => m.ejectedId != null && !m.wasImpostor).length;
+  const impostors = game.players.filter(p => p.role === 'impostor');
+  const survived = impostors.filter(p => p.alive).map(p => p.name).join(', ') || '—';
+  const cost = window.__totalCostUsd.toFixed(3);
+
+  endgameStatsEl.innerHTML = `
+    <div class="row"><span class="label">duration</span><span class="val">${game.time.toFixed(0)}s</span></div>
+    <div class="row"><span class="label">kills</span><span class="val">${totalKills}</span></div>
+    <div class="row"><span class="label">meetings</span><span class="val">${totalMeetings}</span></div>
+    <div class="row"><span class="label">innocents ejected</span><span class="val">${innocentEjections}</span></div>
+    <div class="row"><span class="label">impostors surviving</span><span class="val">${survived}</span></div>
+    <div class="row"><span class="label">openrouter spend</span><span class="val">$${cost}</span></div>
+  `;
+  endgameEl.classList.remove('hidden');
 }
 
 // ========================
@@ -703,6 +822,11 @@ window.addEventListener('keydown', (e) => {
   }
   const local = game.getLocalPlayer();
   if (!local) return;
+  if ((e.key === 'q' || e.key === 'Q') && game.phase === 'playing' && !local.inVent) {
+    game.tryCallMeeting(local);
+    e.preventDefault();
+    return;
+  }
   if ((e.key === 'e' || e.key === 'E') && game.phase === 'playing' && !local.inVent) {
     eHeld = true;
     // Tap-fire actions: report > kill. Tasks + sabotage fixes are hold-driven.
@@ -812,6 +936,16 @@ function gameLoop(timestamp) {
   const sorted = [...game.players].filter(p => p.alive && !p.inVent).sort((a, b) => a.y - b.y);
   for (const p of sorted) p.draw(ctx);
 
+  // Render the local player as a translucent ghost when dead, so the user
+  // can see where they're free-roaming. Other dead players stay invisible.
+  const localGhost = game.getLocalPlayer();
+  if (localGhost && !localGhost.alive) {
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    localGhost.draw(ctx);
+    ctx.restore();
+  }
+
   // Task progress bar floats over the local player while they work.
   drawLocalTaskProgress(ctx);
 
@@ -822,11 +956,12 @@ function gameLoop(timestamp) {
   drawTaskListHUD();
   drawGlobalTaskBar();
   drawInteractHint();
-  drawEndScreen();
+  updateEndgameOverlay();
 
   updateSabotageBanner();
   meetingUI.tick();
   observabilityPanel.tick(timestamp);
+  metrics.tick();
 
   requestAnimationFrame(gameLoop);
 }

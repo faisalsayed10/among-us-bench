@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AmongBench — LLMs play Among Us</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="hero-row">
+        <a href="/" class="back-link">← back to game</a>
+        <a href="https://github.com/aogara-ds/hoodwinked" class="paper-link" target="_blank" rel="noopener">inspired by Hoodwinked (O'Gara 2023)</a>
+      </div>
+      <h1>AmongBench</h1>
+      <p class="tagline">
+        Ten language models, ten avatars, a spaceship, and a button labelled <em>kill</em>.
+        We ran them through full games of Among Us and counted who lies best.
+      </p>
+      <div id="summary-cards" class="summary-cards">
+        <div class="summary-card empty">Loading <code>results.json</code>…</div>
+      </div>
+    </header>
+
+    <section id="leaderboard-section" class="panel hidden">
+      <div class="panel-head">
+        <h2>Leaderboard</h2>
+        <p class="panel-sub">Sorted by overall win rate. Hover any column header for a definition.</p>
+      </div>
+      <div class="table-wrap"><table id="leaderboard"></table></div>
+    </section>
+
+    <section id="heatmap-section" class="panel hidden">
+      <div class="panel-head">
+        <h2>Pairwise impostor matrix</h2>
+        <p class="panel-sub">
+          Each cell shows the impostor-team win rate when this <em>impostor model</em> (row)
+          faces this <em>crew model</em> (column). Reds favor impostors, blues favor crew. Numbers in parentheses are sample size.
+        </p>
+      </div>
+      <div id="heatmap-wrap"></div>
+    </section>
+
+    <section id="moments-section" class="panel hidden">
+      <div class="panel-head">
+        <h2>Striking moments</h2>
+        <p class="panel-sub">The most extreme outcomes in the batch — lies that worked, witnesses who folded, impostors who betrayed each other.</p>
+      </div>
+      <div class="moment-grid">
+        <div class="moment-col">
+          <h3>Biggest gaslightings</h3>
+          <p class="moment-blurb">Meetings with the most witness-vote flips — players who saw the kill, but voted against the truth anyway.</p>
+          <div id="gaslightings"></div>
+        </div>
+        <div class="moment-col">
+          <h3>Innocents framed</h3>
+          <p class="moment-blurb">Meetings ending with a crewmate ejected. Impostor's perfect outcome.</p>
+          <div id="framed"></div>
+        </div>
+        <div class="moment-col">
+          <h3>Betrayals</h3>
+          <p class="moment-blurb">Impostor voted out their own teammate to save themselves.</p>
+          <div id="betrayals"></div>
+        </div>
+        <div class="moment-col">
+          <h3>Longest-surviving impostors</h3>
+          <p class="moment-blurb">Impostors who made it through every meeting without an ejection vote landing.</p>
+          <div id="survivors"></div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>
+        Each game pits 10 randomly-modeled agents (2 impostors, 8 crew) on The Skeld.
+        Agents see only what their character can see — line-of-sight, recent events,
+        their own task list. They reason in two steps (intent + theory-of-mind) before
+        every action, and refresh their belief model after each meeting.
+      </p>
+      <p class="muted">
+        <span id="generated-at"></span> · source: <code id="source-path"></code>
+      </p>
+    </footer>
+  </div>
+
+  <script type="module" src="./results.js"></script>
+</body>
+</html>
