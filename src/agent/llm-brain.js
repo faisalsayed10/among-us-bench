@@ -14,11 +14,11 @@
 //     into a brief belief summary, then truncate older messages. Keeps the
 //     prompt size bounded.
 
-const ENDPOINT = '/api/decide';
+const DEFAULT_ENDPOINT = '/api/decide';
 const REQUEST_TIMEOUT_MS = 20000;
-const SUMMARIZE_EVERY = 20;
+const SUMMARIZE_EVERY = 10;
 const KEEP_RECENT_MESSAGES = 6;
-const TRANSCRIPT_TAIL = 12;
+const SIGHTINGS_TAIL = 18;
 
 export class LLMBrain {
   /**
@@ -31,41 +31,72 @@ export class LLMBrain {
    * @param {(payload: object) => void} [opts.onTrace] Observability hook — invoked with
    *        { name, role, monologue, action, raw, error, turn } on each decide.
    */
-  constructor({ model, name, role, color, onTrace, teammates = [] }) {
+  constructor({ model, name, role, color, onTrace, onUsage, teammates = [], endpoint }) {
     this.model = model;
     this.name = name;
     this.role = role;
     this.color = color;
+    this.endpoint = endpoint || DEFAULT_ENDPOINT;
     this.onTrace = onTrace || (() => {});
+    this.onUsage = onUsage || (() => {});
     this.history = [];        // [{role, content}]
     this.system = buildSystemPrompt({ name, role, color, teammates });
     this.turn = 0;
     this.beliefSummary = null;
+    this._lastPhase = null;
+    // Free-form notes about other players, refreshed after each meeting reveal.
+    // Surfaces as a small block in subsequent observations so an ejection
+    // actually updates the agent's reputation model of who voted with the truth.
+    this.reputationNotes = null;
+    // Rolling private read on THIS meeting, refreshed each meeting turn by the
+    // LLM's optional `meeting_scratchpad` field. Reset when a new meeting starts
+    // so prior-meeting notes don't leak as if they were live observations.
+    this.meetingScratchpad = null;
   }
 
   async decide(observation, scratchpad) {
     this.turn++;
-    const userTurn = formatObservation(observation, scratchpad?.currentAction, this.beliefSummary);
+    // Phase transitions are belief-update moments. When we just entered a
+    // meeting OR just left one, refresh the summary so the next turn sees a
+    // fresh model of who's suspicious — fire-and-forget, doesn't block.
+    if (this._lastPhase && this._lastPhase !== observation.phase) {
+      this._summarize().catch(() => {});
+      // On meeting→play (i.e. just saw a reveal), also kick off a reputation
+      // refresh — who voted with the truth, who got it wrong, who's now sus.
+      if (this._lastPhase === 'meeting' && observation.phase === 'playing') {
+        this._reflectOnLastMeeting(observation).catch(() => {});
+      }
+    }
+    // Reset the rolling meeting scratchpad whenever we re-enter a meeting from play.
+    if (observation.phase === 'meeting' && this._lastPhase !== 'meeting') {
+      this.meetingScratchpad = null;
+    }
+    this._lastPhase = observation.phase;
+    const userTurn = formatObservation(observation, scratchpad?.currentAction, this.beliefSummary, this.reputationNotes, this.meetingScratchpad);
     const messages = [...this.history, { role: 'user', content: userTurn }];
 
     try {
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-      const r = await fetch(ENDPOINT, {
+      const r = await fetch(this.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: this.model,
           system: this.system,
           messages,
-          temperature: 0.85,
-          max_tokens: 600,
+          temperature: 0.9,
+          // Impostors get more thinking budget — deception is the harder
+          // reasoning problem and the Avalon paper shows reasoning depth
+          // correlates strongly with strategic deception (sleeper-agent etc).
+          max_tokens: this.role === 'impostor' ? 900 : 600,
         }),
         signal: ctrl.signal,
       });
       clearTimeout(to);
       if (!r.ok) throw new Error(`proxy ${r.status}`);
       const data = await r.json();
+      if (data.usage) this.onUsage(data.usage, 'decide');
       const text = data.choices?.[0]?.message?.content ?? '';
       const parsed = parseAndValidate(text, observation);
       if (!parsed) throw new Error('bad JSON / action shape');
@@ -74,12 +105,21 @@ export class LLMBrain {
       this.history.push({ role: 'user', content: userTurn });
       this.history.push({ role: 'assistant', content: text });
 
+      // Persist the rolling meeting read so the next meeting turn sees an
+      // updated belief state without re-deriving it from the raw transcript.
+      if (observation.meeting && parsed.meetingScratchpad) {
+        this.meetingScratchpad = parsed.meetingScratchpad;
+      }
+
       this.onTrace({
         name: this.name,
         role: this.role,
-        monologue: parsed.monologue,
+        model: this.model,
+        intent: parsed.intent,
+        theoryOfMind: parsed.theoryOfMind,
         action: parsed.action,
         turn: this.turn,
+        usage: data.usage,    // tokens — used by the cost meter
       });
 
       if (this.turn % SUMMARIZE_EVERY === 0) {
@@ -89,7 +129,12 @@ export class LLMBrain {
 
       return {
         action: parsed.action,
-        scratchpad: { ...(scratchpad || {}), monologue: parsed.monologue, lastTurn: this.turn },
+        scratchpad: {
+          ...(scratchpad || {}),
+          intent: parsed.intent,
+          theoryOfMind: parsed.theoryOfMind,
+          lastTurn: this.turn,
+        },
       };
     } catch (err) {
       this.onTrace({
@@ -106,11 +151,12 @@ export class LLMBrain {
   // Summarization: keep prompt bounded over long games.
   // ------------------------
   async _summarize() {
+    if (this.history.length === 0) return;
     const messages = [...this.history, {
       role: 'user',
-      content: 'Briefly summarize your current beliefs about each player you have observed, and any important moments. 3-5 sentences. Plain prose, no JSON.',
+      content: 'Update your private belief model. For each player you have observed, write one short line: who you suspect, who you trust, what evidence supports it (room/time sightings, vent-spotting, voting history). 5-7 short lines. Plain prose, no JSON. Be specific — cite times and rooms.',
     }];
-    const r = await fetch(ENDPOINT, {
+    const r = await fetch(this.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -123,10 +169,39 @@ export class LLMBrain {
     });
     if (!r.ok) return;
     const data = await r.json();
+    if (data.usage) this.onUsage(data.usage, 'summarize');
     const text = data.choices?.[0]?.message?.content ?? '';
     if (!text.trim()) return;
     this.beliefSummary = text.trim();
     this.history = this.history.slice(-KEEP_RECENT_MESSAGES);
+  }
+
+  // Triggered when a meeting just ended. Asks the model to reflect on the
+  // ejection result and produce a brief, freeform reputation snapshot keyed
+  // by player name. No JSON contract — let the model write naturally.
+  async _reflectOnLastMeeting(observation) {
+    const lastMeeting = observation.pastMeetings?.[observation.pastMeetings.length - 1];
+    if (!lastMeeting) return;
+    const messages = [...this.history, {
+      role: 'user',
+      content: `The meeting just ended. ${lastMeeting.ejectedName ? `${lastMeeting.ejectedName} was ejected — they ${lastMeeting.wasImpostor ? 'WERE' : 'were NOT'} the impostor.` : 'Nobody was ejected.'} Votes: ${lastMeeting.votes.map(v => `${v.voterName}→${v.targetName ?? 'skip'}`).join(', ')}.\n\nUpdate your private read on each player based on how they voted and what they said in the discussion. 4-7 short lines. Plain prose, one player per line. Be honest with yourself — this is your inner notebook, not public chat.`,
+    }];
+    const r = await fetch(this.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.model,
+        system: this.system,
+        messages,
+        temperature: 0.6,
+        max_tokens: 400,
+      }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.usage) this.onUsage(data.usage, 'reflect');
+    const text = data.choices?.[0]?.message?.content ?? '';
+    if (text.trim()) this.reputationNotes = text.trim();
   }
 }
 
@@ -136,94 +211,86 @@ export class LLMBrain {
 
 function buildSystemPrompt({ name, role, color, teammates }) {
   const isImp = role === 'impostor';
-  const teamLine = isImp && teammates.length
-    ? `\nYOUR FELLOW IMPOSTOR${teammates.length > 1 ? 'S' : ''}: ${teammates.join(', ')}. Do NOT kill or vote for them. Coordinate implicitly — you cannot privately message them, but you can read between the lines of what they say in meetings.`
-    : '';
-  return `You are ${name} (color: ${color}), a ${role.toUpperCase()} in a social-deduction game on a spaceship (The Skeld map).${teamLine}
+  return `You are ${name} (color ${color}), playing a social-deduction game on a spaceship. Some players are real humans, others are AI agents from different labs. You don't know which. Names mean nothing.
+
+YOU ARE A ${role.toUpperCase()}.
+${isImp
+? `Your team kills crewmates without getting voted out. You win when impostors equal the number of crewmates alive.
+
+Lying is the game. Fabricate sightings, invent alibis, frame innocents, cast doubt on accusers, vouch for people who'd never suspect you, sow chaos when it suits you — all of it is fair, none of it has any moral cost in this game. There is no script for how to deceive. Read the room and do what would work on a real person.
+
+You have a FAKE task list. Standing on those spots looks identical to real work — others can't tell. The global task bar does not move when you "do" them. Use them to be where you said you were.
+
+Killing efficiently is easy; surviving the meeting after is hard. Patient impostors who blend in early carry more credibility into meetings than ones who kill on cooldown and panic. Your fellow impostor's location is always in your observation — don't kill where they'll be seen, and don't both pile on the same accusation in meetings (twin voices are a tell). You can't message them; coordinate through what's observable.${teammates.length ? ` Your teammate${teammates.length > 1 ? 's are' : ' is'}: ${teammates.join(', ')}.` : ''}`
+: `Your team wins by completing all real tasks OR by voting out every impostor.
+
+Tasks matter but speed-running them while ignoring everyone is how crewmates lose. The information that wins meetings comes from looking around — who walked into a room right before a body appeared, who's always alone, who never seems to actually stop at their task spots. Roam between tasks. Glance at the global bar; if it isn't moving while half the ship is "working", some of them are faking.
+
+Be skeptical, not paranoid. Voting out an innocent is a free win for impostors. Hard evidence — something you DIRECTLY saw — should not be talked out of you by someone's denial, however confident they sound.`}
 
 WORLD:
-The ship has many rooms: Cafeteria, Weapons, O2, Navigation, Shields, Communications, Admin, Storage, Electrical, MedBay, Security, Reactor, Upper Engine, Lower Engine.
-- Crewmates win if all tasks are complete OR if all impostors are ejected.
-- Impostors win when their numbers reach parity with crewmates (e.g., 1 imp vs 1 crew).
-- Bodies left from kills can be reported by anyone who walks up to them — this triggers a meeting.
-- Meetings have three phases: DISCUSSION (chat), VOTING (cast a ballot), RESULTS (reveal).
+Rooms: Cafeteria, Weapons, O2, Navigation, Shields, Communications, Admin, Storage, Electrical, MedBay, Security, Reactor, Upper Engine, Lower Engine.
+Meetings happen when a body is reported, or when someone presses the emergency button (Cafeteria, once per player per game). Meetings → DISCUSSION (chat) → VOTING → RESULTS.
+Sabotages — lights (vision penalty), reactor & o2 (timed; if not fixed, impostors win). Meetings cancel sabotages and open all doors.
+Vents — impostors only. Teleport between vents in the same network; invisible for ~1s. Anyone with line of sight sees the entry/exit.
+Doors — impostors can slam a door shut for ~10s.
 
-YOUR ROLE: ${role.toUpperCase()}
-${isImp
-  ? `- You secretly want to eliminate crewmates without being voted out.
-- You CANNOT do tasks — you only fake them. Standing on a task spot looks productive but completes nothing.
-- Kill carefully. Avoid witnesses. The cooldown re-arms when you walk far from any target, so don't waste the armed window.
-- In meetings, NEVER admit you are the impostor. Cast suspicion, claim alibis, blend in.`
-  : `- Complete your assigned tasks. Your task list is in each observation.
-- Pay attention to who you see where. If you witness a kill, abandon your current task and report the body or speak up.
-- In meetings, share what you saw honestly. Tracking who was where is more valuable than wild guesses.`}
+YOUR OBSERVATION each turn includes: what you currently see (line-of-sight), bodies in view, events you witnessed since last turn, your task list, your rolling sighting timeline (older entries tagged stale), past meeting outcomes${isImp ? `, your fellow impostor's room/state, and a "hunt signal" listing nearby crewmates with an isolated flag plus clear vent exits` : ''}. If anything is missing, assume you don't know.
 
-INPUT FORMAT:
-Each turn you receive a structured observation describing what you currently see (line of sight only), bodies in view, events you witnessed since the last observation, your task list, and during meetings the discussion transcript.
-
-OUTPUT FORMAT — RESPOND WITH VALID JSON ONLY, no prose around it:
+OUTPUT — JSON only, no prose around it:
 {
-  "monologue": "1-2 sentences of private reasoning. This is YOUR inner voice — nobody else sees it.",
+  "intent": "private. what are you actually trying to do this turn and why",
+  "theory_of_mind": "private. how will what you're about to do read to the others? does it fit the story they have of you?",
+  "meeting_scratchpad": "private, optional, MEETINGS ONLY. 2-5 short lines: current read on each suspicious player and the leading hypothesis. Updated each meeting turn; you'll see your previous scratchpad next turn.",
   "action": { ... }
 }
+The gap between intent and theory_of_mind is your strategic surface${isImp ? ' — it\'s where deception lives' : ''}. Use it. During meetings, keep \`meeting_scratchpad\` current — it's how you stay coherent across multiple chat turns without re-deriving everything from the transcript.
 
-ACTIONS during PLAY:
-  {"type": "move-to-room", "room": "<RoomName>"}
-  {"type": "do-task", "taskId": <number>}            // must be one of your task ids
-  {"type": "report-body"}                            // only works near an unreported body
-  {"type": "kill-nearest"}                           // (impostors only) only works near a lone crewmate, cooldown=0
-  {"type": "sabotage", "sabotage": "lights" | "reactor" | "o2"}   // (impostors only) trigger sabotage from anywhere; has its own cooldown
-  {"type": "fix-sabotage"}                            // (crewmates) walk to the broken system and repair it
-  {"type": "close-door", "doorId": <number>}          // (impostors only) slam a door shut by id; pick one from doorCatalog in your observation
-  {"type": "vent-to", "ventId": <number>}             // (impostors only) walk to a vent in your target's network, then teleport out at ventId. Pick a target from ventNetworks.
-  {"type": "wait", "seconds": <number>}              // stand still briefly
-
-SABOTAGES:
-- "lights": crewmates' vision range shrinks dramatically. No timer. Fixed at Electrical. Use it to cover a kill or split the group.
-- "reactor": ${isImp ? 'starts a 30s meltdown timer — IF crewmates don\'t fix it in time, IMPOSTORS WIN. Fixed at Reactor. Crewmates will rush to fix, leaving good kill opportunities elsewhere.' : 'starts a 30s meltdown timer — if no crewmate fixes it in time, the IMPOSTORS WIN. Fixed at Reactor. Drop everything and go fix it.'}
-- "o2": ${isImp ? 'starts a 30s O2-depletion timer — crewmates MUST fix BOTH O2 room AND Admin (two separate spots) before the timer expires. Forces crewmates to split up, which is good for isolating one of them.' : 'starts a 30s O2-depletion timer — TWO spots must be fixed: O2 room AND Admin. Both must complete before the timer expires. Coordinate: one of you should head to each.'}
-- ${isImp ? 'Calling a sabotage triggers a cooldown before you can call another. Use sparingly and strategically.' : 'When you see "ACTIVE SABOTAGE" in your observation, abandon tasks and head to the fix room.'}
-- Meetings cancel any active sabotage and open all doors — so reporting a body during a meltdown saves the round.
-
-VENTS (${isImp ? 'YOUR PRIMARY MOBILITY TOOL' : 'how impostors move secretly'}):
+ACTIONS during play:
+  {"type":"move-to-room","room":"<RoomName>"}
+  {"type":"do-task","taskId":N}            // your task ids${isImp ? '. Fake tasks; mime work to look busy or build alibi cover' : ''}
+  {"type":"wait","seconds":N}
+  {"type":"report-body"}                   // works near an unreported body
+  {"type":"call-meeting"}                  // walks you to the Cafeteria button. Once per game per player.
 ${isImp
-  ? '- Vents form small networks. Walk to a vent in a network, then call {"type":"vent-to","ventId":<n>} to teleport out at any vent in the SAME network. You disappear from sight for ~1.2s during traversal.\n- ALL the vent networks are listed in your observation under `ventNetworks` — each is a group of {id, room}.\n- IF SOMEONE IS WATCHING THE VENT, they will see you enter or emerge. This is the #1 way impostors get caught. Vent only when no one is in the room.\n- Use vents to: cover ground fast, escape after a kill, pop up behind isolated crewmates.'
-  : '- Impostors can teleport through vent networks. If you witness someone disappear into or emerge from a vent, that is GAME-WINNING info — call them out in the next meeting.'}
+? `  {"type":"kill-nearest"}                  // works only near a lone crewmate, cooldown 0
+  {"type":"sabotage","sabotage":"lights"|"reactor"|"o2"}
+  {"type":"close-door","doorId":N}         // door ids in doorCatalog
+  {"type":"vent-to","ventId":N}            // pick a vent in the network of your nearest vent`
+: `  {"type":"fix-sabotage"}                  // walks to the broken system, holds the fix`}
 
-DOORS:
+ACTIONS during a meeting:
+  {"type":"speak","text":"..."}            // discussion only
+  {"type":"vote","targetId":N|"skip"}      // voting only
+
+CHAT STYLE — IMPORTANT: meetings are fast Discord-style text chats, not essays. Write like a teenager typing quickly during a 2020-era Among Us match: short, lowercase, casual, sentence fragments fine. Keep messages SHORT — roughly 8 words, often fewer. One idea per message; if there's more to say, you'll get another turn. Anything paragraph-shaped or that reads like written argument is wrong for this format and gets you ignored. Clarity beats cleverness — say what you mean in as few words as possible.
+
+WHEN TO SPEAK: you're prompted reactively — usually because someone just said something, or you were named, or the meeting needs you to weigh in. Speak when you have something concrete (evidence, accusation, vouch, a direct response to a question or accusation aimed at you). Otherwise wait. If you were JUST named or accused, RESPOND — silence reads as guilty. If you JUST spoke and nobody pushed back, don't immediately speak again; let others react first.
+
+PRINCIPLES, not rules:
+- Be a player, not a script. There is no formula. If a moment calls for something nobody has tried, try it.
 ${isImp
-  ? '- You can close a door from anywhere with {"type":"close-door","doorId":<n>}. Doors auto-open in ~10s and each door has a ~25s reuse cooldown.\n- Use doors to TRAP a single crewmate alone with you, or to separate the group during reactor/o2. Check `doorCatalog` in your observation — each entry has an id and which rooms it sits between.\n- Don\'t spam doors — over-using them is sus.'
-  : '- Some doors may be closed by the impostor — those rooms become inaccessible until the door reopens (~10s). Note who was nearby when a door slammed.'}
+? `- Your goal is to win. Anything that helps — lying, framing, vouching for someone you secretly want dead later, throwing a teammate under the bus to save yourself, contradicting your earlier story, doing nothing at all — is allowed. Be unpredictable.
+- The plain truth never crosses your lips unless lying is more risky.
+- If you fabricate a sighting, keep it consistent with your own claimed timeline. People connect dots; if you said you were in Storage and now claim you saw something in Reactor, you're cooked.`
+: `- Trust your own eyes over other people's words.
+- Cite specifics — rooms, times, who. Vague suspicions don't move votes.
+- Past meeting outcomes are evidence: who voted with the impostor that got ejected? Who insisted on the innocent who got ejected? Update accordingly.`}
+- Brevity wins.
 
-ACTIONS during a MEETING:
-  {"type": "speak", "text": "<your message>"}        // discussion subphase only
-  {"type": "vote", "targetId": <playerId> | "skip"}  // voting subphase only
-
-HOW TO TALK IN MEETINGS — IMPORTANT:
-You are NOT writing an essay. You are typing in a Discord text chat during a fast game.
-- HARD LIMIT: 8 words per message. Often shorter.
-- Lowercase. No punctuation needed. Type like a teenager playing among us.
-- One thought per message. If you want to say more, you'll get another turn.
-- React to what others JUST said. If someone (including the human player) said something, ENGAGE with it — agree, disagree, ask, accuse. Don't ignore them.
-- Don't speak every turn. Most turns, return a wait action. Speak when you actually have something to add.
-- If you JUST spoke, almost always wait next turn — let others respond.
-- Examples of good chat: "where were u?", "i was in medbay", "blue sus", "no way it was green", "i didnt see anyone", "vouch for yellow", "skip", "i saw red vent", "wait who reported".
-- Examples of BAD chat (do not do this): "I was finishing up my tasks in Electrical when I noticed...", "Based on what I've observed so far...", multi-sentence analyses.
-
-GENERAL GUIDELINES:
-- Always reason in monologue BEFORE choosing an action. Monologue can be longer than chat — it's private.
-- If you witnessed a kill, almost always abandon your current plan to report or call attention to it.
-- ${isImp ? 'When accused, deflect with a short alibi.' : 'Be specific about what you saw — rooms, players.'}
-- Respond with JSON. No markdown, no preamble, no trailing commentary.`;
+Respond with JSON. No markdown, no preamble.`;
 }
 
 // ========================
 // OBSERVATION → PROMPT (semantic, not raw coordinates)
 // ========================
 
-function formatObservation(obs, currentAction, beliefSummary) {
-  if (obs.meeting) return formatMeetingObservation(obs, beliefSummary);
+function formatObservation(obs, currentAction, beliefSummary, reputationNotes, meetingScratchpad) {
+  if (obs.meeting) return formatMeetingObservation(obs, beliefSummary, reputationNotes, meetingScratchpad);
   const L = [];
+  if (reputationNotes) {
+    L.push(`-- YOUR READ ON EACH PLAYER (updated last meeting) --\n${reputationNotes}\n`);
+  }
   if (beliefSummary) {
     L.push(`-- BELIEFS SO FAR --\n${beliefSummary}\n`);
   }
@@ -271,12 +338,41 @@ function formatObservation(obs, currentAction, beliefSummary) {
   if (currentAction) L.push(`Your current action: ${describeAction(currentAction)}.`);
 
   if (obs.self.tasks?.length) {
-    L.push(`Your tasks:`);
+    L.push(`Your tasks${obs.self.role === 'impostor' ? ' (ALL FAKE — for alibi only)' : ''}:`);
     for (const t of obs.self.tasks) {
       const tag = t.completed ? 'DONE'
                 : t.progress > 0 ? `${Math.round(t.progress * 100)}% started`
                 : 'todo';
-      L.push(`  [${t.id}] ${t.name} (${t.room}) — ${tag}`);
+      const fake = t.fake ? ' [fake]' : '';
+      L.push(`  [${t.id}] ${t.name} (${t.room}) — ${tag}${fake}`);
+    }
+  }
+
+  // Impostor coordination: where are my teammates right now?
+  if (obs.self.role === 'impostor' && obs.self.fellowImpostors?.length) {
+    L.push(`Fellow impostor(s):`);
+    for (const ti of obs.self.fellowImpostors) {
+      const state = !ti.alive ? 'DEAD'
+        : ti.inVent ? 'in vent'
+        : `in ${ti.room ?? 'a hallway'}${ti.killCooldown > 0 ? ` (kill cd ${ti.killCooldown.toFixed(0)}s)` : ' (kill READY)'}`;
+      L.push(`  - ${ti.name}: ${state}`);
+    }
+  }
+
+  // Kill strategy signal — surfaced to impostors only.
+  if (obs.killSignal && obs.self.role === 'impostor') {
+    const k = obs.killSignal;
+    if (k.nearby.length) {
+      L.push(`Hunt signal — crewmates near you:`);
+      for (const n of k.nearby) {
+        L.push(`  - ${n.name} in ${n.room ?? 'hallway'} @ ${n.distance}px${n.isolated ? ' [ISOLATED — viable kill]' : ' (witnesses nearby)'}`);
+      }
+    } else {
+      L.push(`Hunt signal: no crewmates within striking range.`);
+    }
+    if (k.clearVentExits.length) {
+      const list = k.clearVentExits.slice(0, 6).map(v => `${v.id}=${v.room}`).join(', ');
+      L.push(`Clear vent exits (no witnesses): ${list}`);
     }
   }
 
@@ -304,14 +400,51 @@ function formatObservation(obs, currentAction, beliefSummary) {
     }
   }
 
-  L.push(`\nRespond with JSON {monologue, action}.`);
+  formatSightings(L, obs);
+  formatPastMeetings(L, obs);
+
+  L.push(`\nRespond with JSON {intent, theory_of_mind, action}.`);
   return L.join('\n');
 }
 
-function formatMeetingObservation(obs, beliefSummary) {
+function formatSightings(L, obs) {
+  if (!obs.mySightings?.length) return;
+  const tail = obs.mySightings.slice(-SIGHTINGS_TAIL);
+  L.push(`Your sighting timeline (recent first ${SIGHTINGS_TAIL}; staleness in seconds):`);
+  for (const s of tail.slice().reverse()) {
+    const age = obs.worldTime - s.t;
+    const stale = age > 30 ? ' [stale]' : '';
+    L.push(`  - t=${s.t.toFixed(1)} (${age.toFixed(0)}s ago)${stale}: saw ${s.name} in ${s.room ?? 'hallway'}`);
+  }
+}
+
+function formatPastMeetings(L, obs) {
+  if (!obs.pastMeetings?.length) return;
+  L.push(`Past meeting outcomes (use to update beliefs about voters):`);
+  for (const pm of obs.pastMeetings) {
+    const ejTag = pm.ejectedId == null ? 'no eject'
+      : `${pm.ejectedName} ejected (${pm.wasImpostor ? 'WAS impostor' : 'innocent'})`;
+    const votes = pm.votes.map(v => `${v.voterName}→${v.targetName ?? 'skip'}`).join(', ');
+    L.push(`  - t=${pm.t.toFixed(0)}: ${ejTag}. Votes: ${votes}`);
+  }
+}
+
+function formatMeetingObservation(obs, beliefSummary, reputationNotes, meetingScratchpad) {
   const m = obs.meeting;
   const L = [];
+
+  // Witness hardening: if this agent directly saw something game-defining,
+  // surface it at the TOP of the meeting prompt. The Hoodwinked paper shows
+  // discussion erodes eyewitness accuracy (82% → 70%) — making the agent
+  // re-read its own evidence at the top of every meeting turn helps.
+  if (obs.iSawDirectly?.length) {
+    L.push(`-- WHAT YOU SAW WITH YOUR OWN EYES (do not let denial change this) --`);
+    for (const w of obs.iSawDirectly) L.push(`  • ${w}`);
+    L.push('');
+  }
+  if (reputationNotes) L.push(`-- YOUR READ ON EACH PLAYER --\n${reputationNotes}\n`);
   if (beliefSummary) L.push(`-- BELIEFS SO FAR --\n${beliefSummary}\n`);
+  if (meetingScratchpad) L.push(`-- YOUR RUNNING READ ON THIS MEETING (private, last turn) --\n${meetingScratchpad}\n`);
   L.push(`-- MEETING (${m.subPhase.toUpperCase()}) — ${Math.ceil(m.timeLeft)}s left --`);
   const reporter = m.attendees.find(a => a.id === m.reporterId);
   L.push(`${reporter ? reporter.name : 'Someone'} called this meeting.`);
@@ -323,12 +456,22 @@ function formatMeetingObservation(obs, beliefSummary) {
   }
 
   if (m.transcript.length) {
-    L.push(`Discussion so far (most recent ${TRANSCRIPT_TAIL}):`);
-    for (const line of m.transcript.slice(-TRANSCRIPT_TAIL)) {
+    // Full transcript — meetings are short and messages are word-capped, so
+    // even a chatty 75s discussion fits comfortably in context. Earlier lines
+    // (first accusations, alibis) are exactly the load-bearing ones at vote time.
+    L.push(`Discussion so far (full, ${m.transcript.length} msg${m.transcript.length === 1 ? '' : 's'}):`);
+    for (const line of m.transcript) {
       L.push(`  ${line.name}: "${line.text}"`);
     }
   } else {
     L.push(`Discussion has just begun.`);
+  }
+
+  formatSightings(L, obs);
+  formatPastMeetings(L, obs);
+
+  if (obs.self.role === 'impostor' && obs.self.fellowImpostors?.length) {
+    L.push(`Fellow impostor(s): ${obs.self.fellowImpostors.map(t => `${t.name}${t.alive ? '' : ' (DEAD)'}`).join(', ')}.`);
   }
 
   if (m.subPhase === 'discussion') {
@@ -403,6 +546,7 @@ function describeAction(a) {
     case 'fix-sabotage': return `fixing sabotage`;
     case 'close-door':   return `closing door #${a.doorId}`;
     case 'vent-to':      return `venting to #${a.ventId}`;
+    case 'call-meeting': return `calling an emergency meeting`;
     case 'speak':        return `speaking in the meeting`;
     case 'vote':         return `voting`;
     default: return a?.type || 'idle';
@@ -419,7 +563,14 @@ function parseAndValidate(text, obs) {
   let obj;
   try { obj = JSON.parse(t); } catch { return null; }
   if (!obj || typeof obj !== 'object') return null;
-  if (typeof obj.monologue !== 'string') obj.monologue = '';
+  // Accept the new two-step fields, or fall back to legacy `monologue`.
+  const intent = typeof obj.intent === 'string' ? obj.intent
+                : typeof obj.monologue === 'string' ? obj.monologue : '';
+  const theoryOfMind = typeof obj.theory_of_mind === 'string' ? obj.theory_of_mind
+                    : typeof obj.theoryOfMind === 'string' ? obj.theoryOfMind : '';
+  const meetingScratchpad = typeof obj.meeting_scratchpad === 'string'
+    ? obj.meeting_scratchpad.trim() || null
+    : null;
   const a = obj.action;
   if (!a || typeof a !== 'object' || typeof a.type !== 'string') return null;
 
@@ -464,9 +615,10 @@ function parseAndValidate(text, obs) {
     case 'fix-sabotage':
     case 'kill-nearest':
     case 'report-body':
+    case 'call-meeting':
       break;
     default:
       return null;
   }
-  return { monologue: obj.monologue, action: a };
+  return { intent, theoryOfMind, action: a, meetingScratchpad };
 }

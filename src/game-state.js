@@ -67,9 +67,9 @@ export const TASK_DECAY_FACTOR = 0.5;
 // Meeting sub-phase durations (seconds). LLM latency eats into "real" discussion
 // time, so these are generous — agents need a few heartbeats to actually
 // converse, not just blurt one line each.
-export const DISCUSSION_DURATION = 75;
-export const VOTING_DURATION = 45;
-export const RESULTS_DURATION = 8;
+export const DISCUSSION_DURATION = 60;
+export const VOTING_DURATION = 15;
+export const RESULTS_DURATION = 6;
 export const MAX_SPEAK_LENGTH = 200;
 
 // Sabotage tuning.
@@ -144,6 +144,30 @@ export class GameState {
     this.phase = 'playing';           // playing | meeting | ended
     this.meeting = null;              // { reporterId, bodyId|null, startedAt }
     this._nextBodyId = 1;
+    // Cross-round learning: persist meeting outcomes so subsequent meetings
+    // know who voted how and who turned out innocent.
+    this.pastMeetings = [];           // [{ t, reporterId, ejectedId, wasImpostor, votes: [{voterId, targetId}], transcript }]
+    this.meetingButtonUses = new Map(); // playerId → count; emergency button is once per player
+  }
+
+  // ------------------------
+  // Emergency button
+  // ------------------------
+  // Cafeteria-anchored button — any alive player may press it once per game
+  // to start a meeting with no body.
+  tryCallMeeting(caller) {
+    if (this.phase !== 'playing') return false;
+    if (!caller.alive) return false;
+    if (this.activeSabotage) return false;
+    if ((this.meetingButtonUses.get(caller.id) || 0) >= 1) return false;
+    // Must be inside the cafeteria, near the table.
+    const dx = caller.x - 955, dy = caller.y - 240;
+    if (dx * dx + dy * dy > 130 * 130) return false;
+    if (caller.getCurrentRoom() !== 'Cafeteria') return false;
+    this.meetingButtonUses.set(caller.id, (this.meetingButtonUses.get(caller.id) || 0) + 1);
+    this.emit({ type: 'emergency-meeting', callerId: caller.id });
+    this._startMeeting({ reporterId: caller.id, bodyId: null });
+    return true;
   }
 
   addPlayer(player, controller, { local = false } = {}) {
@@ -198,6 +222,15 @@ export class GameState {
     task.progress = Math.min(1, task.progress + dt / TASK_DURATION);
     task.lastProgressedAt = this.time;
 
+    if (task.fake) {
+      // Fake task — looks like work but never completes. Reset to 0 once full
+      // so the impostor can keep "doing" it forever. No events emitted: witnesses
+      // see the impostor standing at the spot (spatial vulnerability), nothing
+      // else. Skip global completion + win check.
+      if (task.progress >= 1) task.progress = 0;
+      return;
+    }
+
     if (wasZero) {
       this.emit({
         type: 'task-progress-start',
@@ -216,7 +249,7 @@ export class GameState {
         def: task.def,
         witnessIds: this._witnessesAt(task.def.x, task.def.y),
       });
-      if (this.tasks.every(t => t.completed)) {
+      if (this.tasks.filter(t => !t.fake).every(t => t.completed)) {
         this.phase = 'ended';
         this.winner = 'crewmates';
         this.emit({ type: 'game-end', winner: 'crewmates', reason: 'all-tasks-complete' });
@@ -416,7 +449,19 @@ export class GameState {
       m.subPhaseEndsAt = this.time + RESULTS_DURATION;
       this.emit({ type: 'voting-end', ejectedId, wasImpostor: m.ejectedWasImpostor });
     } else if (m.subPhase === 'results') {
-      this.emit({ type: 'meeting-end' });
+      // Persist the outcome so future meetings can reason about voting history.
+      this.pastMeetings.push({
+        t: m.startedAt,
+        reporterId: m.reporterId,
+        ejectedId: m.ejectedId,
+        wasImpostor: m.ejectedWasImpostor,
+        votes: [...m.votes.entries()].map(([voterId, targetId]) => ({ voterId, targetId })),
+        // Keep the chat for post-game analysis / replay. Small payload.
+        transcript: m.transcript.map(line => ({
+          t: line.t, playerId: line.playerId, name: line.name, text: line.text,
+        })),
+      });
+      this.emit({ type: 'meeting-end', ejectedId: m.ejectedId, wasImpostor: m.ejectedWasImpostor });
       this.phase = 'playing';
       this.meeting = null;
       this._checkWinConditions();
@@ -701,13 +746,15 @@ export class GameState {
       return;
     }
     if (this.phase !== 'playing') return;
+    // Dead players don't act, EXCEPT the local human — they get to free-roam
+    // as a ghost while spectating. Their controller still ticks so WASD works.
     for (const p of this.players) {
-      if (!p.alive) continue;
+      if (!p.alive && p.id !== this.localPlayerId) continue;
       const c = this.controllers.get(p.id);
       if (c) c.update(dt);
     }
     for (const p of this.players) {
-      if (!p.alive) continue;
+      if (!p.alive && p.id !== this.localPlayerId) continue;
       p.update(dt, this.players);
     }
 

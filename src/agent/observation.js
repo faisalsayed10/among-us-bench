@@ -91,7 +91,8 @@ export function buildObservation(game, self, cursor) {
     });
   }
 
-  // Self task views
+  // Self task views (includes fake tasks for impostors — they look identical so
+  // the impostor can blend in by "doing" them).
   const tasks = tasksForPlayer(game.tasks, self.id).map(t => ({
     id: t.id,
     name: t.def.name,
@@ -100,6 +101,7 @@ export function buildObservation(game, self, cursor) {
     y: t.def.y,
     progress: t.progress,
     completed: t.completed,
+    fake: !!t.fake,
   }));
 
   // Recent events since last call. We don't try to filter perfectly by
@@ -140,11 +142,82 @@ export function buildObservation(game, self, cursor) {
   }
 
   // Impostors know who their fellow impostor(s) are — Among Us rule.
+  // Augmented with current room + activity so they can coordinate (don't both
+  // accuse the same crewmate, don't kill in a room your teammate is fake-tasking
+  // in, etc.).
   const fellowImpostors = self.role === 'impostor'
     ? game.players
         .filter(p => p.role === 'impostor' && p.id !== self.id)
-        .map(p => ({ id: p.id, name: p.name, alive: p.alive }))
+        .map(p => ({
+          id: p.id, name: p.name, alive: p.alive,
+          room: p.alive ? p.getCurrentRoom() : null,
+          inVent: !!p.inVent,
+          killCooldown: p.killCooldown,
+        }))
     : [];
+
+  // Kill strategy signal for impostors — who's nearby, who's isolated, which
+  // vent exits look clear. Pure derived info; lets the brain decide WHEN to
+  // strike instead of just calling kill-nearest the moment cooldown hits 0.
+  let killSignal = null;
+  if (self.role === 'impostor' && self.alive && !self.inVent) {
+    const HUNT_RADIUS = 280;
+    const ISOLATION_RADIUS = 220;
+    const nearby = [];
+    for (const p of game.players) {
+      if (!p.alive || p.role === 'impostor' || p.inVent || p.id === self.id) continue;
+      const d = Math.hypot(p.x - self.x, p.y - self.y);
+      if (d > HUNT_RADIUS) continue;
+      // Isolated = no OTHER living non-impostor (and no non-teammate witness) within radius of p.
+      let alone = true;
+      for (const q of game.players) {
+        if (q.id === p.id || q.id === self.id || !q.alive || q.inVent) continue;
+        if (q.role === 'impostor') continue; // teammates don't count as witnesses
+        if (Math.hypot(q.x - p.x, q.y - p.y) < ISOLATION_RADIUS) { alone = false; break; }
+      }
+      nearby.push({
+        id: p.id, name: p.name, room: p.getCurrentRoom(),
+        distance: Math.round(d), isolated: alone,
+      });
+    }
+    nearby.sort((a, b) => a.distance - b.distance);
+    // Clear vent exits = vents in your reachable networks where no non-impostor
+    // is currently visible at the exit point.
+    const clearVentExits = [];
+    for (const net of VENT_CONNECTIONS) {
+      for (const id of net) {
+        const v = VENT_DEFS.find(vv => vv.id === id);
+        if (!v) continue;
+        let clear = true;
+        for (const q of game.players) {
+          if (!q.alive || q.inVent || q.role === 'impostor') continue;
+          if (Math.hypot(q.x - v.x, q.y - v.y) < 200) { clear = false; break; }
+        }
+        if (clear) clearVentExits.push({ id, room: v.room });
+      }
+    }
+    killSignal = { nearby, clearVentExits };
+  }
+
+  // Past meeting outcomes (cross-round learning). Strips voter→target into
+  // a compact form the brain can use to update beliefs.
+  const nameOf = (id) => {
+    if (id == null || id === 'skip') return id === 'skip' ? 'skip' : null;
+    const p = game.players.find(pp => pp.id === id);
+    return p ? p.name : `player#${id}`;
+  };
+  const pastMeetings = game.pastMeetings.map(pm => ({
+    t: pm.t,
+    reporterId: pm.reporterId,
+    reporterName: nameOf(pm.reporterId),
+    ejectedId: pm.ejectedId,
+    ejectedName: nameOf(pm.ejectedId),
+    wasImpostor: pm.wasImpostor,
+    votes: pm.votes.map(v => ({
+      voterId: v.voterId, voterName: nameOf(v.voterId),
+      targetId: v.targetId, targetName: nameOf(v.targetId),
+    })),
+  }));
 
   const observation = {
     self: {
@@ -183,6 +256,8 @@ export function buildObservation(game, self, cursor) {
     doorCatalog: self.role === 'impostor' ? game.getDoorDefs() : null,
     // Vent catalog: only impostors get the full network map (and only they can use vents).
     ventNetworks: self.role === 'impostor' ? ventNetworksForObservation() : null,
+    killSignal,
+    pastMeetings,
   };
 
   return {
@@ -200,6 +275,7 @@ const GLOBAL_EVENT_TYPES = new Set([
   'meeting-start', 'meeting-end',
   'voting-start', 'voting-end',
   'body-reported',          // everyone is told a meeting was called
+  'emergency-meeting',      // emergency button presses are public
   'sabotage-start',         // the entire ship sees the alert
   'sabotage-end',
   'door-closed',            // door slam is audible across the ship

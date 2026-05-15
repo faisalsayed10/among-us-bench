@@ -10,7 +10,7 @@
 // We re-decide every HEARTBEAT seconds (so e.g. an impostor reconsiders when
 // a crewmate walks into view) and any time the executor reports `done`.
 
-import { getSpawnPoint } from '../collision.js';
+import { getSpawnPoint, getRoomAt } from '../collision.js';
 import { TASK_INTERACT_RADIUS } from '../tasks.js';
 import { buildObservation } from './observation.js';
 import { findPath } from './pathfinding.js';
@@ -39,16 +39,46 @@ export class AgentController {
     this.eventCursor = { lastEventIndex: 0 };
     this._inFlight = false;
     this._lastVisibleSig = '';
-    // Random per-agent meeting-cadence offset so 10 agents don't all
-    // speak at the same instant when a meeting opens.
-    this._meetingJitter = Math.random() * 4;
+    // Rolling sightings log — per-agent timeline of "I saw X in room Y at t=Z".
+    // Drives evidence-based voting and lets old sightings fade ("stale") in the
+    // meeting prompt rather than being claimed as fresh.
+    this.sightings = []; // [{ t, playerId, name, room }]
+    this._lastSightingSampleAt = -Infinity;
+    // Permanent log of game-defining things the agent personally witnessed
+    // (kills, vent enters/exits). Surfaced at the top of every meeting prompt
+    // to harden agents against gaslighting (Hoodwinked finding).
+    this.iSawDirectly = [];
+    this._witnessEventCursor = 0;
+    // Meeting-chat scheduler state. We don't poll on a fixed heartbeat any
+    // more — instead we pick `_nextMeetingDecideAt` reactively based on
+    // sub-phase changes, new transcript messages, and whether we were
+    // addressed by name. See `_updateInMeeting` for the rules.
+    this._lastMeetingId = null;
+    this._meetingTranscriptCursor = 0;
+    this._meetingLastSubPhase = null;
+    this._meetingLastSpokeAt = -Infinity;
+    this._meetingLastDecideAt = -Infinity;
+    this._nextMeetingDecideAt = Infinity;
+    // Controller-level stuck detection. Lives outside the executor so it
+    // survives action changes (the brain re-issuing a different action mid-move
+    // would otherwise reset the executor's internal stuck timer and the agent
+    // could oscillate in a corner forever).
+    // Window of recent positions (timestamps + xy) for stuck detection. We use
+    // the BOUNDING BOX of the last STUCK_WINDOW seconds — that way an agent
+    // oscillating back-and-forth across a wall corner (which would defeat a
+    // "displacement from anchor" check by repeatedly crossing the threshold)
+    // still reads as stuck because the bbox stays small.
+    this._posTrail = []; // [{t, x, y}]
+    this._stuckReplans = 0;
   }
 
   update(dt) {
+    this._harvestWitnessEvents();
     if (this.game.phase === 'meeting') {
       this._updateInMeeting(dt);
       return;
     }
+    this._sampleSightings();
     this.timeSinceDecide += dt;
 
     // Always tick the current executor — it's the agent's commitment between
@@ -58,12 +88,72 @@ export class AgentController {
       if (status.done) {
         this.action = null;
         this.exec = null;
+        this._resetStuck();
       }
     }
+
+    this._checkStuck(dt);
 
     if (!this._inFlight && this._shouldDecide()) {
       this._fireDecide();
     }
+  }
+
+  _resetStuck() {
+    this._posTrail = [];
+    this._stuckReplans = 0;
+  }
+
+  /**
+   * If the player's recent positions all fit in a small bounding box while a
+   * movement executor is active, treat the agent as stuck: first force the
+   * underlying mover to replan, and after repeated failures abandon the action
+   * so the brain picks something new.
+   */
+  _checkStuck(dt) {
+    if (!this.exec || !this.action) { this._posTrail.length = 0; return; }
+    const moves = ['move-to-room', 'do-task', 'vent-to', 'fix-sabotage', 'call-meeting', 'report-body'];
+    if (!moves.includes(this.action.type)) { this._posTrail.length = 0; return; }
+
+    const t = this.game.time;
+    const WINDOW = 2.0;
+    const BBOX_THRESH = 30; // px: smaller bbox over WINDOW seconds = stuck
+
+    this._posTrail.push({ t, x: this.player.x, y: this.player.y });
+    while (this._posTrail.length && t - this._posTrail[0].t > WINDOW) this._posTrail.shift();
+    if (t - this._posTrail[0].t < WINDOW) return; // not enough history yet
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of this._posTrail) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    if (Math.max(maxX - minX, maxY - minY) > BBOX_THRESH) return; // moving freely
+
+    // Stuck. Wipe trail so we don't re-fire every frame.
+    this._posTrail.length = 0;
+    this._stuckReplans++;
+    const mover = this._activeMover();
+    if (this._stuckReplans <= 2 && mover) {
+      mover.path = findPath(this.player.x, this.player.y, mover.goal.x, mover.goal.y);
+      mover.idx = 0;
+      mover.bestWpDist = Infinity;
+      mover.skipsThisLeg = 0;
+    } else {
+      this.action = null;
+      this.exec = null;
+      this._stuckReplans = 0;
+      this.timeSinceDecide = HEARTBEAT;
+    }
+  }
+
+  /** Reach into composite executors to find the MoveToPointExec actually driving motion. */
+  _activeMover() {
+    const e = this.exec;
+    if (!e) return null;
+    if (e instanceof MoveToPointExec) return e;
+    if (e.mover instanceof MoveToPointExec) return e.mover;
+    return null;
   }
 
   _shouldDecide() {
@@ -81,6 +171,67 @@ export class AgentController {
     if (sig !== this._lastVisibleSig) return true;
 
     return false;
+  }
+
+  _harvestWitnessEvents() {
+    // Scan new game events for ones THIS agent personally witnessed and
+    // accumulate human-readable lines. Permanent log; never decays.
+    const me = this.player;
+    const evs = this.game.events;
+    for (let i = this._witnessEventCursor; i < evs.length; i++) {
+      const ev = evs[i];
+      const sawIt = ev.witnessIds && ev.witnessIds.includes(me.id);
+      if (!sawIt) continue;
+      const t = ev.t?.toFixed?.(1) ?? '?';
+      const nameOf = (id) => {
+        const p = this.game.players.find(pp => pp.id === id);
+        return p ? p.name : `player#${id}`;
+      };
+      if (ev.type === 'kill') {
+        const room = this._roomAtPoint(ev.at?.x, ev.at?.y);
+        this.iSawDirectly.push(`t=${t}: saw ${nameOf(ev.killerId)} kill ${nameOf(ev.victimId)} in ${room}`);
+      } else if (ev.type === 'vent-enter') {
+        const room = this._roomAtPoint(ev.at?.x, ev.at?.y);
+        this.iSawDirectly.push(`t=${t}: saw ${nameOf(ev.playerId)} enter a vent in ${room}`);
+      } else if (ev.type === 'vent-exit') {
+        const room = this._roomAtPoint(ev.at?.x, ev.at?.y);
+        this.iSawDirectly.push(`t=${t}: saw ${nameOf(ev.playerId)} emerge from a vent in ${room}`);
+      }
+    }
+    this._witnessEventCursor = evs.length;
+  }
+
+  _roomAtPoint(x, y) {
+    if (x == null || y == null) return 'a hallway';
+    return getRoomAt(x, y) ?? 'a hallway';
+  }
+
+  _sampleSightings() {
+    // Sample at most once per second; dedupe consecutive same-room sightings of
+    // the same player. Capped at 60 entries (~oldest dropped) so the prompt
+    // stays bounded over a long round.
+    const t = this.game.time;
+    if (t - this._lastSightingSampleAt < 1.0) return;
+    this._lastSightingSampleAt = t;
+    const me = this.player;
+    if (!me.alive) return;
+    const VISION_R2 = this.game.getVisionRadius(me) ** 2;
+    for (const p of this.game.players) {
+      if (p.id === me.id || !p.alive || p.inVent) continue;
+      const dx = p.x - me.x, dy = p.y - me.y;
+      if (dx * dx + dy * dy > VISION_R2) continue;
+      // Approx LoS gate: skip the polygon test here (sampler runs hot). The
+      // observation builder still uses the strict visibility polygon for the
+      // current-frame visiblePlayers list. Sightings are advisory memory.
+      const room = p.getCurrentRoom();
+      const last = this.sightings[this.sightings.length - 1];
+      if (last && last.playerId === p.id && last.room === room && t - last.t < 4) {
+        last.t = t; // refresh timestamp instead of duplicating
+        continue;
+      }
+      this.sightings.push({ t, playerId: p.id, name: p.name, room });
+      if (this.sightings.length > 60) this.sightings.shift();
+    }
   }
 
   _visibilitySignature() {
@@ -101,6 +252,8 @@ export class AgentController {
       const { observation, cursor } = buildObservation(this.game, this.player, this.eventCursor);
       this.eventCursor = cursor;
       this._lastVisibleSig = this._visibilitySignature();
+      observation.mySightings = this.sightings;
+      observation.iSawDirectly = this.iSawDirectly;
 
       const ctxAction = this.action;
       const result = await this.brain.decide(
@@ -113,8 +266,19 @@ export class AgentController {
       // Phase might have flipped to meeting / ended while we awaited.
       if (this.game.phase !== 'playing') return;
 
-      this.action = action || wait(0.5);
-      this.exec = makeExecutor(this.action, this.player, this.game);
+      const nextAction = action || wait(0.5);
+      // Preserve the executor (and its stuck-detection state) when the brain
+      // re-issues the same action. Otherwise frequent re-decides at game start
+      // — when many players are bunched in the cafeteria and the visibility
+      // signature changes every tick — keep resetting stuckTimer, so the
+      // mover's skip/replan logic never trips and the agent wedges in a corner.
+      if (this.exec && actionsEquivalent(this.action, nextAction)) {
+        this.action = nextAction;
+      } else {
+        this.action = nextAction;
+        this.exec = makeExecutor(this.action, this.player, this.game);
+        this._resetStuck();
+      }
     } finally {
       this._inFlight = false;
     }
@@ -125,41 +289,124 @@ export class AgentController {
     this.action = null;
     this.exec = null;
 
-    // Fresh jitter on each new meeting (detected by reporter/start-time change).
-    const meetingId = this.game.meeting?.startedAt;
-    if (meetingId !== this._lastMeetingId) {
-      this._lastMeetingId = meetingId;
-      this._meetingJitter = Math.random() * 4;
-      this.timeSinceDecide = 0;
+    const m = this.game.meeting;
+    if (!m) return;
+    const now = this.game.time;
+
+    // New meeting → reset chat scheduler state.
+    if (m.startedAt !== this._lastMeetingId) {
+      this._lastMeetingId = m.startedAt;
+      this._meetingTranscriptCursor = 0;
+      this._meetingLastSubPhase = null;
+      this._meetingLastSpokeAt = -Infinity;
+      this._meetingLastDecideAt = -Infinity;
+      // Initial per-agent stagger so 10 agents don't pile in at t=0.
+      this._nextMeetingDecideAt = now + 0.8 + Math.random() * 2.4;
     }
 
-    this.timeSinceDecide += dt;
-    if (this._inFlight || !this.player.alive) return;
-    if (this.timeSinceDecide < MEETING_HEARTBEAT + this._meetingJitter) return;
-    this._meetingJitter = 0; // stagger only applies to the first decide of this meeting
+    if (!this.player.alive) return;
+
+    // Sub-phase changed (discussion → voting → results): always re-decide soon.
+    // Critical for voting — without this, an agent who just spoke could sit at
+    // its post-speak cooldown and miss the entire voting window.
+    if (m.subPhase !== this._meetingLastSubPhase) {
+      this._meetingLastSubPhase = m.subPhase;
+      this._nextMeetingDecideAt = Math.min(this._nextMeetingDecideAt, now + 0.2);
+    }
+
+    // Consume any new transcript lines since we last looked. New chatter is the
+    // primary signal to re-decide — agents react to what others said, not the clock.
+    if (m.subPhase === 'discussion' && m.transcript.length > this._meetingTranscriptCursor) {
+      const newMsgs = m.transcript.slice(this._meetingTranscriptCursor);
+      this._meetingTranscriptCursor = m.transcript.length;
+      const addressed = newMsgs.some(msg =>
+        msg.playerId !== this.player.id && this._mentionsMe(msg.text)
+      );
+      const fromMe = newMsgs.every(msg => msg.playerId === this.player.id);
+      if (!fromMe) {
+        // Addressed → snap reply (0.4–1.0s). Otherwise pause to "think" (1.2–2.6s)
+        // so the chat doesn't read like a simultaneous keysmash.
+        const delay = addressed ? 0.4 + Math.random() * 0.6
+                                : 1.2 + Math.random() * 1.4;
+        this._nextMeetingDecideAt = Math.min(this._nextMeetingDecideAt, now + delay);
+      }
+    }
+
+    // Backstop: even with zero new messages, decide at least every MEETING_BACKSTOP
+    // seconds so a quiet agent still gets a chance to speak / will be ready to vote.
+    const backstop = this._meetingLastDecideAt + MEETING_BACKSTOP;
+    if (backstop < this._nextMeetingDecideAt) this._nextMeetingDecideAt = backstop;
+
+    if (this._inFlight) return;
+    if (now < this._nextMeetingDecideAt) return;
+
+    // If I just spoke and nobody addressed me, defer — let others respond.
+    if (m.subPhase === 'discussion'
+        && now - this._meetingLastSpokeAt < POST_SPEAK_COOLDOWN
+        && !this._addressedInRecentTail(m)) {
+      this._nextMeetingDecideAt = now + 3;
+      return;
+    }
+
     this._fireMeetingDecide();
+  }
+
+  _mentionsMe(text) {
+    if (!text || !this.player.name) return false;
+    return new RegExp(`\\b${this.player.name}\\b`, 'i').test(text);
+  }
+
+  _addressedInRecentTail(m) {
+    const tail = m.transcript.slice(-4);
+    return tail.some(msg => msg.playerId !== this.player.id && this._mentionsMe(msg.text));
   }
 
   async _fireMeetingDecide() {
     this._inFlight = true;
-    this.timeSinceDecide = 0;
+    this._meetingLastDecideAt = this.game.time;
+    this._nextMeetingDecideAt = Infinity; // scheduler will repopulate from triggers
     try {
       const { observation, cursor } = buildObservation(this.game, this.player, this.eventCursor);
       this.eventCursor = cursor;
+      observation.mySightings = this.sightings;
+      observation.iSawDirectly = this.iSawDirectly;
       const { action, scratchpad } = (await this.brain.decide(observation, this.scratchpad)) || {};
       if (scratchpad !== undefined) this.scratchpad = scratchpad;
       if (!action || this.game.phase !== 'meeting') return;
-      if (action.type === 'speak') this.game.speak(this.player.id, action.text);
-      else if (action.type === 'vote') this.game.castVote(this.player.id, action.targetId);
+      if (action.type === 'speak') {
+        if (this.game.speak(this.player.id, action.text)) {
+          this._meetingLastSpokeAt = this.game.time;
+        }
+      } else if (action.type === 'vote') {
+        this.game.castVote(this.player.id, action.targetId);
+      }
     } finally {
       this._inFlight = false;
     }
   }
 }
 
-// Slower meeting cadence so the chat doesn't spam — with 10 agents at 7s
-// you get ~1.4 decisions/sec total, and most return wait. Feels conversational.
-const MEETING_HEARTBEAT = 7;
+// Backstop heartbeat — never go longer than this between decides, even if the
+// chat is dead silent. Cheap insurance against missing the voting window.
+const MEETING_BACKSTOP = 12;
+// After speaking, hold off on more chatter unless addressed by name.
+const POST_SPEAK_COOLDOWN = 4;
+
+function actionsEquivalent(a, b) {
+  if (!a || !b || a.type !== b.type) return false;
+  switch (a.type) {
+    case 'move-to-room': return a.room === b.room;
+    case 'do-task':      return a.taskId === b.taskId;
+    case 'sabotage':     return a.sabotage === b.sabotage;
+    case 'close-door':   return a.doorId === b.doorId;
+    case 'vent-to':      return Number(a.ventId) === Number(b.ventId);
+    case 'kill-nearest':
+    case 'report-body':
+    case 'fix-sabotage':
+    case 'call-meeting': return true;
+    default: return false; // wait/speak/vote — always rebuild
+  }
+}
 
 // ========================
 // EXECUTORS
@@ -179,8 +426,9 @@ function makeExecutor(action, player, game) {
     case 'fix-sabotage':  return new FixSabotageExec(player, game);
     case 'close-door':    return new CloseDoorExec(player, game, action.doorId);
     case 'vent-to':       return new VentToExec(player, game, action.ventId);
-    // Schema-documented but not yet implemented:
-    case 'call-meeting': case 'speak': case 'vote':
+    case 'call-meeting':  return new CallMeetingExec(player, game);
+    // Speak/vote are handled directly in _fireMeetingDecide, not via executor.
+    case 'speak': case 'vote':
       return new WaitExec(player, 0.1);
     default:
       return new WaitExec(player, 0.5);
@@ -394,6 +642,29 @@ class VentToExec {
       return { done: true };
     }
     return { done: true };
+  }
+}
+
+// ------------------------
+// Call-meeting: agent walks to the Cafeteria emergency button, then presses it.
+// One-shot per agent per game; tryCallMeeting enforces eligibility.
+// ------------------------
+class CallMeetingExec {
+  constructor(player, game) {
+    this.player = player; this.game = game;
+    this.mover = new MoveToPointExec(player, 955, 240, { arriveRoom: 'Cafeteria', game });
+    this.pressed = false;
+  }
+  step(dt) {
+    const p = this.player;
+    const dx = p.x - 955, dy = p.y - 240;
+    if (!this.pressed && p.getCurrentRoom() === 'Cafeteria' && dx * dx + dy * dy < 130 * 130) {
+      this.game.tryCallMeeting(p);
+      this.pressed = true;
+      p.setIntent(0, 0);
+      return { done: true };
+    }
+    return this.mover.step(dt);
   }
 }
 
