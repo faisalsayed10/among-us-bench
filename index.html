@@ -457,10 +457,96 @@
     .endgame-btn.primary { background: #67e8a3; color: #0a0f14; border-color: #67e8a3; font-weight: 600; }
     .endgame-btn.primary:hover { background: #8aedb9; }
     .endgame-btn.ghost:hover { background: rgba(120, 150, 180, 0.2); }
+
+    /* ============ API KEY MODAL ============ */
+    #key-modal {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.88);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      backdrop-filter: blur(6px);
+    }
+    #key-modal.show { display: flex; }
+    .key-card {
+      background: #0e1218;
+      border: 1px solid rgba(120, 150, 180, 0.35);
+      border-radius: 14px;
+      padding: 32px 36px;
+      width: 440px;
+      max-width: 90vw;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    .key-card h2 {
+      font-size: 20px;
+      color: #9fd8ec;
+      margin-bottom: 10px;
+      letter-spacing: 1px;
+    }
+    .key-card p {
+      font-size: 13px;
+      color: #b0b8c0;
+      line-height: 1.55;
+      margin-bottom: 16px;
+    }
+    .key-card p a { color: #67e8a3; }
+    .key-input {
+      width: 100%;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(120, 150, 180, 0.4);
+      border-radius: 6px;
+      color: #fff;
+      font: 13px 'SF Mono', Consolas, monospace;
+      padding: 10px 12px;
+      outline: none;
+      margin-bottom: 12px;
+    }
+    .key-input:focus { border-color: #67e8a3; }
+    .key-err {
+      color: #ec6b6b;
+      font-size: 12px;
+      margin-bottom: 12px;
+      min-height: 16px;
+    }
+    .key-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .key-btn {
+      padding: 9px 18px;
+      border-radius: 7px;
+      border: 1px solid rgba(120, 150, 180, 0.4);
+      background: rgba(120, 150, 180, 0.1);
+      color: #fff;
+      font: 13px 'Segoe UI', sans-serif;
+      cursor: pointer;
+    }
+    .key-btn.primary {
+      background: #67e8a3; color: #0a0f14; border-color: #67e8a3; font-weight: 600;
+    }
+    .key-btn.primary:hover { background: #8aedb9; }
+    .key-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
+
+  <!-- Prompt for an OpenRouter key when the server has none configured. -->
+  <div id="key-modal">
+    <div class="key-card">
+      <h2>OpenRouter API Key</h2>
+      <p>
+        An <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a> key is required to play —
+        average cost is ~$5 per game. Your key is stored locally in your browser and only sent to this site's proxy.
+      </p>
+      <input id="key-input" class="key-input" type="password" placeholder="sk-or-..." autocomplete="off" spellcheck="false">
+      <p style="font-size: 12px; margin-top: -4px; margin-bottom: 12px; color: #8a949c;">
+        Don't have a key? <a href="/results/">Check the results from past games instead →</a>
+      </p>
+      <div id="key-err" class="key-err"></div>
+      <div class="key-actions">
+        <button id="key-save" class="key-btn primary">Save & start</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Top-right utility bar: cost (dev), results link. Stays visible always. -->
   <div id="util-bar">

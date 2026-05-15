@@ -22,12 +22,16 @@ app.use(express.json({ limit: '2mb' }));
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, hasKey: !!process.env.OPENROUTER_API_KEY });
+  // hasKey: server has its own key (don't need to prompt)
+  // acceptsUserKey: client may supply one via x-openrouter-key header
+  res.json({ ok: true, hasKey: !!process.env.OPENROUTER_API_KEY, acceptsUserKey: true });
 });
 
 app.post('/api/decide', async (req, res) => {
-  if (!process.env.OPENROUTER_API_KEY) {
-    return res.status(500).json({ error: 'OPENROUTER_API_KEY not set on server' });
+  const userKey = req.header('x-openrouter-key');
+  const apiKey = userKey || process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return res.status(401).json({ error: 'no OpenRouter key — set OPENROUTER_API_KEY or pass x-openrouter-key header' });
   }
   const { model, system, messages, temperature, max_tokens } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -54,7 +58,7 @@ app.post('/api/decide', async (req, res) => {
     const r = await fetch(OPENROUTER_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'http://localhost:5173',
         'X-Title': 'Among Us Simulation',

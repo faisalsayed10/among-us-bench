@@ -175,15 +175,46 @@ const onTrace = (entry) => {
   try {
     const r = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
     const j = await r.json();
-    if (!j?.ok || !j.hasKey) console.warn('[brains] /api/health reported no key — agents will idle.');
-    else {
-      console.log('[brains] LLM mode — model assignments:');
-      for (const [name, m] of window.__agentModels) console.log(`  ${name} → ${m.label} (${m.slug})`);
+    if (!j?.ok) return;
+    if (j.hasKey) {
+      console.log('[brains] LLM mode — server has a key configured.');
+      return;
     }
+    // No server key → user must supply one. Reuse cached key from localStorage.
+    const cached = localStorage.getItem('openrouter_key');
+    if (cached) {
+      window.__openrouterKey = cached;
+      console.log('[brains] using OpenRouter key from localStorage');
+      return;
+    }
+    promptForKey();
   } catch {
     console.warn('[brains] proxy not reachable at /api/health — start it with `npm run server`. Agents will idle.');
   }
 })();
+
+function promptForKey() {
+  const modal = document.getElementById('key-modal');
+  const input = document.getElementById('key-input');
+  const save = document.getElementById('key-save');
+  const err = document.getElementById('key-err');
+  if (!modal) return;
+  modal.classList.add('show');
+  setTimeout(() => input.focus(), 50);
+
+  const submit = () => {
+    const v = input.value.trim();
+    if (!v.startsWith('sk-or-')) {
+      err.textContent = 'That doesn\'t look like an OpenRouter key (expected sk-or-...).';
+      return;
+    }
+    localStorage.setItem('openrouter_key', v);
+    window.__openrouterKey = v;
+    modal.classList.remove('show');
+  };
+  save.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+}
 
 for (let i = 0; i < npcs.length; i++) {
   const p = npcs[i];
