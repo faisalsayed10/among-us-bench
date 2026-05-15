@@ -7,7 +7,9 @@
     "dev": "concurrently -k -n server,vite -c yellow,cyan \"npm:server\" \"npx vite\"",
     "vite": "npx vite",
     "server": "node server.js",
-    "build": "npx vite build"
+    "build": "npx vite build",
+    "bench": "node bench.js",
+    "analyze": "node analyze.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
