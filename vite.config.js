@@ -12,6 +12,7 @@ export default defineConfig({
   },
   // Multi-page: / is the game, /results/ is the leaderboard.
   build: {
+    target: 'es2022',  // top-level await
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
