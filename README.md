@@ -61,9 +61,9 @@ npm run bench -- --games=50 --concurrency=4 --speedup=4 --pool=cheap
 
 ## Findings
 
-Honestly? I shipped this without running enough games to make a credible claim. The pipeline is there, the metrics are there, the results page is there — but the leaderboard at `/results/` is on a small sample and shouldn't be read as definitive. If you want to fund a serious batch (~$500 of credit) and rerun the analyzer, that data will start to mean something. PRs welcome.
+I was too poor to do any runs. I don't have any findings lol. The game is fun to play i guess but for benchmarking it costs a lot. If you want to fund a serious batch (~$500 of credit) and rerun the analyzer, our results/ page will actually start to show results. PRs welcome.
 
-Anecdotally from the games I did watch: Opus 4.7 is unusually good at calmly refuting accusations, Llama 3.3 tunnel-visions on its first suspicion and rarely updates, and basically every model still struggles with positional reasoning ("X said they were in Electrical but the body was reported in Storage at the same time").
+Anecdotally from the games I did watch: Opus 4.7 is unusually good at calmly refuting accusations, Llama 3.3 tunnel-visions on its first suspicion and rarely updates, and basically every model still struggles with positional reasoning ("X said they were in Electrical but the body was reported in Storage at the same time"). Maybe harness needs improvements. This was a weekend project.
 
 ## Stack
 
