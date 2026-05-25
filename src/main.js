@@ -106,6 +106,10 @@ if (SPECTATE) {
   human.alive = false;
   human.killCooldown = 0;
   game.tasks = game.tasks.filter(t => t.playerId !== human.id);
+  // Park the spectator at the cafeteria emergency-button center so the camera
+  // frames the room nicely on load. The ghost itself is hidden in the render loop.
+  human.x = SPAWN_CENTER.x;
+  human.y = SPAWN_CENTER.y;
 }
 
 // Log who the impostors are — useful while debugging, hidden from the game UI.
@@ -1003,7 +1007,7 @@ function gameLoop(timestamp) {
   // Render the local player as a translucent ghost when dead, so the user
   // can see where they're free-roaming. Other dead players stay invisible.
   const localGhost = game.getLocalPlayer();
-  if (localGhost && !localGhost.alive) {
+  if (localGhost && !localGhost.alive && localGhost.role !== 'spectator') {
     ctx.save();
     ctx.globalAlpha = 0.45;
     localGhost.draw(ctx);
