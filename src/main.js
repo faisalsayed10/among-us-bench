@@ -15,6 +15,28 @@ import { GameMetrics } from './metrics.js';
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
+// First-load mode picker — Play vs Spectate. Persists in localStorage.
+// Override via ?mode=spectate / ?mode=play in the URL.
+await (async function chooseMode() {
+  const urlMode = new URLSearchParams(location.search).get('mode');
+  if (urlMode === 'play' || urlMode === 'spectate') {
+    localStorage.setItem('amongbench_mode', urlMode);
+    return;
+  }
+  if (localStorage.getItem('amongbench_mode')) return;
+  const modal = document.getElementById('mode-modal');
+  if (!modal) return;
+  modal.classList.add('show');
+  await new Promise(resolve => {
+    document.getElementById('mode-play').addEventListener('click', () => {
+      localStorage.setItem('amongbench_mode', 'play'); modal.classList.remove('show'); resolve();
+    });
+    document.getElementById('mode-spectate').addEventListener('click', () => {
+      localStorage.setItem('amongbench_mode', 'spectate'); modal.classList.remove('show'); resolve();
+    });
+  });
+})();
+
 // ========================
 // GAME STATE
 // ========================
@@ -62,7 +84,9 @@ const SPAWN_RADIUS = 95;
   }
 }
 
-// Random 2 impostors from the full roster (human is eligible).
+// Spectator mode: human is a roaming ghost, all 9 NPCs play.
+const SPECTATE = localStorage.getItem('amongbench_mode') === 'spectate';
+
 const NUM_IMPOSTORS = 2;
 function pickImpostors(pool, n) {
   const ids = pool.map(p => p.id);
@@ -72,9 +96,17 @@ function pickImpostors(pool, n) {
   }
   return ids.slice(0, n);
 }
-const impostorIds = pickImpostors(game.players, NUM_IMPOSTORS);
+const impostorPool = SPECTATE ? npcs : game.players;
+const impostorIds = pickImpostors(impostorPool, NUM_IMPOSTORS);
 game.assignRoles({ impostorIds });
 game.assignTasks({ tasksPerPlayer: 4 });
+
+if (SPECTATE) {
+  human.role = 'spectator';
+  human.alive = false;
+  human.killCooldown = 0;
+  game.tasks = game.tasks.filter(t => t.playerId !== human.id);
+}
 
 // Log who the impostors are — useful while debugging, hidden from the game UI.
 console.log('[setup] impostors:',
@@ -223,6 +255,7 @@ for (let i = 0; i < npcs.length; i++) {
     : [];
   const assigned = modelDeck[i % modelDeck.length];
   window.__agentModels.set(p.name, assigned);
+  p.modelLabel = assigned.label;
   const brain = new LLMBrain({
     model: assigned.slug,
     name: p.name,
@@ -672,9 +705,9 @@ function drawTaskListHUD() {
   const lineH = 18;
   const boxW = 220;
   const boxH = 24 + mine.length * lineH + 12;
-  // Shift past the observability panel (320px + 16px gutter + 16px margin).
-  const x = window.innerWidth - boxW - padding - 352;
-  const y = padding;
+  // Top-left, tucked under the room badge (badge is 36px tall + 8px gutter).
+  const x = padding;
+  const y = padding + 36 + 8;
 
   ctx.fillStyle = 'rgba(10, 15, 20, 0.85)';
   ctx.beginPath();

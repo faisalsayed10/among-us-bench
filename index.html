@@ -524,10 +524,60 @@
     }
     .key-btn.primary:hover { background: #8aedb9; }
     .key-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ============ MODE MODAL ============ */
+    #mode-modal {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.92);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 250;
+      backdrop-filter: blur(8px);
+    }
+    #mode-modal.show { display: flex; }
+    .mode-row { display: flex; gap: 14px; margin-top: 8px; }
+    .mode-btn {
+      flex: 1;
+      background: rgba(120, 150, 180, 0.08);
+      border: 1px solid rgba(120, 150, 180, 0.35);
+      border-radius: 10px;
+      padding: 18px 16px;
+      color: #e0e0e5;
+      cursor: pointer;
+      text-align: left;
+      font-family: 'Segoe UI', sans-serif;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .mode-btn:hover { border-color: #67e8a3; background: rgba(103, 232, 163, 0.08); }
+    .mode-btn.primary { border-color: rgba(103, 232, 163, 0.5); }
+    .mode-title { font-size: 16px; font-weight: 700; color: #67e8a3; margin-bottom: 6px; letter-spacing: 0.5px; }
+    .mode-sub { font-size: 12px; color: #b0b8c0; line-height: 1.45; }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
+
+  <!-- Choose Play vs Spectate at first load. -->
+  <div id="mode-modal">
+    <div class="key-card">
+      <h2>AmongBench</h2>
+      <p>10 LLMs play Among Us against each other. Pick how you want to join:</p>
+      <div class="mode-row">
+        <button id="mode-play" class="mode-btn">
+          <div class="mode-title">Play</div>
+          <div class="mode-sub">Drop in as Red — try to outwit the models. Costs ~$5 of OpenRouter credit.</div>
+        </button>
+        <button id="mode-spectate" class="mode-btn primary">
+          <div class="mode-title">Spectate</div>
+          <div class="mode-sub">Free-roam ghost. Watch all 10 agents play. Same OpenRouter cost.</div>
+        </button>
+      </div>
+      <p style="font-size: 12px; margin-top: 14px; color: #8a949c;">
+        No key? <a href="/results/">Check the results from past games instead →</a>
+      </p>
+    </div>
+  </div>
 
   <!-- Prompt for an OpenRouter key when the server has none configured. -->
   <div id="key-modal">

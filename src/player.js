@@ -187,21 +187,29 @@ export class Player {
 
   drawNameTag(ctx) {
     ctx.save();
-    ctx.font = 'bold 8px "Segoe UI", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
+    ctx.font = 'bold 8px "Segoe UI", Arial, sans-serif';
     const text = this.name;
-    const metrics = ctx.measureText(text);
-    const tw = metrics.width + 6;
-
+    const tw = ctx.measureText(text).width + 6;
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.beginPath();
     ctx.roundRect(this.x - tw / 2, this.y - 26, tw, 12, 3);
     ctx.fill();
-
     ctx.fillStyle = '#ffffff';
     ctx.fillText(text, this.x, this.y - 15);
+
+    if (this.modelLabel) {
+      ctx.font = '7px "Segoe UI", Arial, sans-serif';
+      const mw = ctx.measureText(this.modelLabel).width + 6;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.beginPath();
+      ctx.roundRect(this.x - mw / 2, this.y - 13, mw, 10, 3);
+      ctx.fill();
+      ctx.fillStyle = '#9fd8ec';
+      ctx.fillText(this.modelLabel, this.x, this.y - 4);
+    }
 
     ctx.restore();
   }

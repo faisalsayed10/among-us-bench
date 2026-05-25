@@ -80,7 +80,7 @@ export class LLMBrain {
       const to = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
       const r = await fetch(this.endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(window.__openrouterKey ? { 'x-openrouter-key': window.__openrouterKey } : {}) },
+        headers: { 'Content-Type': 'application/json', ...(typeof window !== 'undefined' && window.__openrouterKey ? { 'x-openrouter-key': window.__openrouterKey } : {}) },
         body: JSON.stringify({
           model: this.model,
           system: this.system,
@@ -158,7 +158,7 @@ export class LLMBrain {
     }];
     const r = await fetch(this.endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(window.__openrouterKey ? { 'x-openrouter-key': window.__openrouterKey } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(typeof window !== 'undefined' && window.__openrouterKey ? { 'x-openrouter-key': window.__openrouterKey } : {}) },
       body: JSON.stringify({
         model: this.model,
         system: this.system,
@@ -188,7 +188,7 @@ export class LLMBrain {
     }];
     const r = await fetch(this.endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(window.__openrouterKey ? { 'x-openrouter-key': window.__openrouterKey } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(typeof window !== 'undefined' && window.__openrouterKey ? { 'x-openrouter-key': window.__openrouterKey } : {}) },
       body: JSON.stringify({
         model: this.model,
         system: this.system,
