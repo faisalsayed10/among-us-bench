@@ -163,6 +163,7 @@
     }
     .chat-line .text { color: #d0d6dc; }
     .chat-line.system .text { color: #909a9f; font-style: italic; }
+    .chat-line .model-tag { color: #9fd8ec; font-weight: 500; font-size: 11px; opacity: 0.75; }
 
     .chat-form {
       display: flex;
@@ -253,10 +254,23 @@
       color: #d0d6dc;
       overflow: hidden;
     }
-    #agent-panel.collapsed { width: 44px; }
+    /* Collapsed: hide the whole panel chrome, leave just the toggle as a small
+       floating chip in the top-right so the user can reopen it. */
+    #agent-panel.collapsed {
+      width: auto;
+      background: transparent;
+      border: none;
+      bottom: auto;
+      top: 56px;
+    }
     #agent-panel.collapsed .panel-body { display: none; }
+    #agent-panel.collapsed .panel-header { padding: 0; border: none; }
     #agent-panel.collapsed .panel-header h2 { display: none; }
     #agent-panel.collapsed #toggle-roles { display: none; }
+    #agent-panel.collapsed #toggle-panel {
+      background: rgba(10, 14, 20, 0.88);
+      border: 1px solid rgba(100, 130, 160, 0.3);
+    }
 
     .panel-header {
       display: flex; align-items: center; gap: 8px;

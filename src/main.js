@@ -15,24 +15,23 @@ import { GameMetrics } from './metrics.js';
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-// First-load mode picker — Play vs Spectate. Persists in localStorage.
-// Override via ?mode=spectate / ?mode=play in the URL.
+// Mode picker — Play vs Spectate. Shown every load (one click, no big deal).
+// Override via ?mode=spectate / ?mode=play in the URL to skip.
 await (async function chooseMode() {
   const urlMode = new URLSearchParams(location.search).get('mode');
   if (urlMode === 'play' || urlMode === 'spectate') {
-    localStorage.setItem('amongbench_mode', urlMode);
+    sessionStorage.setItem('amongbench_mode', urlMode);
     return;
   }
-  if (localStorage.getItem('amongbench_mode')) return;
   const modal = document.getElementById('mode-modal');
   if (!modal) return;
   modal.classList.add('show');
   await new Promise(resolve => {
     document.getElementById('mode-play').addEventListener('click', () => {
-      localStorage.setItem('amongbench_mode', 'play'); modal.classList.remove('show'); resolve();
+      sessionStorage.setItem('amongbench_mode', 'play'); modal.classList.remove('show'); resolve();
     });
     document.getElementById('mode-spectate').addEventListener('click', () => {
-      localStorage.setItem('amongbench_mode', 'spectate'); modal.classList.remove('show'); resolve();
+      sessionStorage.setItem('amongbench_mode', 'spectate'); modal.classList.remove('show'); resolve();
     });
   });
 })();
@@ -85,7 +84,7 @@ const SPAWN_RADIUS = 95;
 }
 
 // Spectator mode: human is a roaming ghost, all 9 NPCs play.
-const SPECTATE = localStorage.getItem('amongbench_mode') === 'spectate';
+const SPECTATE = sessionStorage.getItem('amongbench_mode') === 'spectate';
 
 const NUM_IMPOSTORS = 2;
 function pickImpostors(pool, n) {
@@ -106,10 +105,6 @@ if (SPECTATE) {
   human.alive = false;
   human.killCooldown = 0;
   game.tasks = game.tasks.filter(t => t.playerId !== human.id);
-  // Park the spectator at the cafeteria emergency-button center so the camera
-  // frames the room nicely on load. The ghost itself is hidden in the render loop.
-  human.x = SPAWN_CENTER.x;
-  human.y = SPAWN_CENTER.y;
 }
 
 // Log who the impostors are — useful while debugging, hidden from the game UI.

@@ -110,11 +110,14 @@ export class MeetingUI {
 
   _renderTranscript() {
     const m = this.game.meeting;
+    const models = window.__agentModels;
     const html = m.transcript.map(t => {
       const author = escapeHtml(t.name);
       const text = escapeHtml(t.text);
       const color = colorForPlayer(this.game, t.playerId);
-      return `<div class="chat-line"><span class="author" style="color:${color}">${author}:</span><span class="text">${text}</span></div>`;
+      const modelLabel = models?.get(t.name)?.label;
+      const modelHtml = modelLabel ? ` <span class="model-tag">[${escapeHtml(modelLabel)}]</span>` : '';
+      return `<div class="chat-line"><span class="author" style="color:${color}">${author}${modelHtml}:</span><span class="text">${text}</span></div>`;
     }).join('');
     this.transcript.innerHTML = html || `<div class="chat-line system"><span class="text">Discussion begins.</span></div>`;
     this.transcript.scrollTop = this.transcript.scrollHeight;
