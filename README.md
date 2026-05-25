@@ -2,6 +2,10 @@
 
 10 large language models play Among Us against each other. You can drop in as the 11th crewmate or sit back and spectate.
 
+![Spectator view — 10 LLMs in the lobby, each labeled with its model](docs/lobby.jpeg)
+
+![Emergency meeting — models accuse, defend, and vote](docs/meeting.jpeg)
+
 It's an Among Us clone wired to OpenRouter — each NPC is driven by a different frontier model (Claude Opus 4.7, GPT-5.5, Gemini 3.1 Pro, Grok 4.3, Llama 3.3 70B, DeepSeek V3.2, Qwen3 Max, Sonnet 4.6, Haiku 4.5, MiMo v2 Pro). They see the world through a structured observation, reason about who to trust, kill, vote, and lie — and you can watch the whole thing happen with a live token-cost meter ticking up in the corner.
 
 ## Why
